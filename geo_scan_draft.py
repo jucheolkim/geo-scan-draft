@@ -60,17 +60,26 @@ def load_from_excel(uploaded_file):
             if not row[0] or not str(row[0]).startswith('Q'):
                 continue
             n = int(str(row[0]).replace('Q', ''))
+            # 컬럼: 번호(0), 질문(1), 유형(2), 단계(3), 확인포인트(4)
+            #        GPT OFF(5), GPT ON(6), Gemini(7), 언급(8,9,10)
             q_dict = {
                 'question':    str(row[1]) if row[1] else '',
                 'type':        str(row[2]) if row[2] else '',
                 'stage':       str(row[3]) if row[3] else '',
-                'check_point': '',
+                'check_point': str(row[4]) if len(row) > 4 and row[4] else '',
                 'data':        [],
             }
             questions.append(q_dict)
-            answers['off'][n] = str(row[4]) if row[4] else ''
-            answers['on'][n]  = str(row[5]) if row[5] else ''
-            answers['gem'][n] = str(row[6]) if row[6] else ''
+            # 새 형식 (확인포인트 컬럼 추가됨): 5,6,7
+            # 구 형식 (확인포인트 없음): 4,5,6
+            if len(row) >= 8 and row[5] is not None:
+                answers['off'][n] = str(row[5]) if row[5] else ''
+                answers['on'][n]  = str(row[6]) if row[6] else ''
+                answers['gem'][n] = str(row[7]) if row[7] else ''
+            else:
+                answers['off'][n] = str(row[4]) if len(row) > 4 and row[4] else ''
+                answers['on'][n]  = str(row[5]) if len(row) > 5 and row[5] else ''
+                answers['gem'][n] = str(row[6]) if len(row) > 6 and row[6] else ''
 
         st.session_state.questions = questions
         st.session_state.answers   = answers
@@ -188,7 +197,7 @@ def create_answer_excel():
     ai_labels = ['ChatGPT 검색OFF', 'ChatGPT 검색ON', 'Gemini']
 
     # 헤더 행
-    headers = ["번호", "질문", "유형", "단계",
+    headers = ["번호", "질문", "유형", "단계", "확인포인트",
                "ChatGPT 검색OFF", "ChatGPT 검색ON", "Gemini",
                "GPT OFF 언급", "GPT ON 언급", "Gemini 언급"]
     for ci, h in enumerate(headers):
@@ -206,23 +215,24 @@ def create_answer_excel():
         cell_style(ws_ans, row, 2, q_data.get('question',''), bg_fill, 'FF333333', False, 'left', 10)
         cell_style(ws_ans, row, 3, q_data.get('type',''), bg_fill, 'FF555555', False, 'left', 9)
         cell_style(ws_ans, row, 4, q_data.get('stage',''), bg_fill, 'FF555555', False, 'center', 9)
+        cell_style(ws_ans, row, 5, q_data.get('check_point',''), bg_fill, 'FF555555', False, 'left', 9)
 
         for j, key in enumerate(ai_keys):
             ans = st.session_state.answers[key][n]
-            cell_style(ws_ans, row, 5+j, ans, bg_fill, 'FF333333', False, 'left', 9)
+            cell_style(ws_ans, row, 6+j, ans, bg_fill, 'FF333333', False, 'left', 9)
 
             # 언급 여부
             mention = check_mention(ans, st.session_state.brand_name) if ans.strip() else None
             if mention is True:
-                cell_style(ws_ans, row, 8+j, "✅ 언급됨", green_fill, 'FF155724', True, 'center', 9)
+                cell_style(ws_ans, row, 9+j, "✅ 언급됨", green_fill, 'FF155724', True, 'center', 9)
             elif mention is False:
-                cell_style(ws_ans, row, 8+j, "❌ 미언급", red_fill, 'FFB43216', True, 'center', 9)
+                cell_style(ws_ans, row, 9+j, "❌ 미언급", red_fill, 'FFB43216', True, 'center', 9)
             else:
-                cell_style(ws_ans, row, 8+j, "—", bg_fill, 'FF999999', False, 'center', 9)
+                cell_style(ws_ans, row, 9+j, "—", bg_fill, 'FF999999', False, 'center', 9)
 
         ws_ans.row_dimensions[row].height = 80
 
-    col_widths = [8, 40, 25, 12, 50, 50, 50, 12, 12, 12]
+    col_widths = [8, 40, 25, 12, 35, 50, 50, 50, 12, 12, 12]
     for ci, w in enumerate(col_widths):
         ws_ans.column_dimensions[openpyxl.utils.get_column_letter(ci+1)].width = w
 
@@ -303,12 +313,22 @@ def create_question_word():
     # 크림웍스 퍼플
     cr, cg, cb = (112, 48, 160)
     BRAND_HEX  = st.session_state.brand_color.replace('#','')
+
+    # 브랜드 컬러 30% 연하게 (흰색과 혼합)
+    def lighten(r_, g_, b_, factor=0.5):
+        return (
+            int(r_ + (255 - r_) * factor),
+            int(g_ + (255 - g_) * factor),
+            int(b_ + (255 - b_) * factor),
+        )
+    lr, lg, lb = lighten(br, bg, bb, 0.5)
+    BRAND_LIGHT_HEX = f'{lr:02X}{lg:02X}{lb:02X}'  # 유형 박스 배경
+
     CW_HEX     = 'EADCF4'   # 연보라 (헤더/강조)
-    YELLOW_HEX = 'FFCC66'   # 유형 박스 노랑
     GRAY_HEX   = 'F7F7F7'
     WHITE_HEX  = 'FFFFFF'
     GRAY2_HEX  = 'FAFAFA'
-    NOTICE_HEX = 'FEF9E7'
+    NOTICE_HEX = 'EADCF4'   # 주의사항도 연보라로 통일
     DARK_HEX   = '1A1A14'
 
     doc = Document()
@@ -492,15 +512,16 @@ def create_question_word():
                 r(dt.rows[j+1].cells[ci].paragraphs[0],
                   val, size=9, color=(26,23,20))
 
-        # 인사이트 박스 (연보라 배경)
+        # 인사이트 박스 (연보라 배경) — check_point 내용 사용
         ins_t = doc.add_table(rows=1, cols=1)
         ins_t.style = 'Table Grid'
         set_bg(ins_t.rows[0].cells[0], CW_HEX)
         set_cell_margins(ins_t.rows[0].cells[0])
         ip = ins_t.rows[0].cells[0].paragraphs[0]
         r(ip, "→  ", size=9, bold=True, color=(cr,cg,cb))
-        r(ip, f"이 질문에서 {st.session_state.brand_name}이 어떻게 언급되는지 확인하세요.",
-          size=9, color=(26,23,20))
+        # check_point가 있으면 사용, 없으면 기본 문구
+        insight_text = check if check.strip() else f"이 질문에서 {st.session_state.brand_name}이(가) 어떻게 언급되는지 + 경쟁사 대비 포지션을 확인하세요."
+        r(ip, insight_text, size=9, color=(26,23,20))
 
         sp = doc.add_paragraph()
         sp.paragraph_format.space_after = Pt(8)
@@ -508,35 +529,39 @@ def create_question_word():
     # ── 질문 선정 근거 요약 ──
     doc.add_page_break()
     p_sum = doc.add_paragraph()
-    p_sum.paragraph_format.space_after = Pt(8)
+    p_sum.paragraph_format.space_after = Pt(4)
     r(p_sum, "질문 선정 근거 요약", size=14, bold=True, color=(26,23,20))
+
+    p_sum_desc = doc.add_paragraph()
+    p_sum_desc.paragraph_format.space_after = Pt(8)
+    r(p_sum_desc, "이 7개 질문은 다음 자료를 교차 분석해 도출했습니다.", size=9.5, color=(85,85,85))
 
     sum_t = doc.add_table(rows=1, cols=3)
     sum_t.style = 'Table Grid'
-    for ci, h_txt in enumerate(["자료명","발행처","연도"]):
+    for ci, h_txt in enumerate(["자료명", "발행처", "연도"]):
         set_bg(sum_t.rows[0].cells[ci], CW_HEX)
         set_cell_margins(sum_t.rows[0].cells[ci])
         r(sum_t.rows[0].cells[ci].paragraphs[0],
           h_txt, size=9, bold=True, color=(85,85,85))
 
-    # 각 질문의 데이터 소스를 취합
-    all_sources = {}
+    # 각 질문의 데이터 소스 취합 (자료명: content, 발행처: source, 연도: year)
+    all_sources = {}  # key: source → (content, year)
     for q_data in st.session_state.questions:
-        for d in q_data.get('data',[]):
-            key = d.get('source','')
-            if key and key not in all_sources:
-                all_sources[key] = d.get('year','')
-    for idx, (src, yr) in enumerate(all_sources.items()):
-        row_bg = WHITE_HEX if idx%2==0 else GRAY2_HEX
+        for d in q_data.get('data', []):
+            src = d.get('source', '').strip()
+            if src and src not in all_sources:
+                all_sources[src] = (d.get('content', ''), d.get('year', ''))
+
+    for idx, (src, (content_val, yr)) in enumerate(all_sources.items()):
+        row_bg = WHITE_HEX if idx % 2 == 0 else GRAY2_HEX
         new_row = sum_t.add_row()
-        set_bg(new_row.cells[0], row_bg)
-        set_bg(new_row.cells[1], row_bg)
-        set_bg(new_row.cells[2], row_bg)
-        set_cell_margins(new_row.cells[0])
-        set_cell_margins(new_row.cells[1])
-        set_cell_margins(new_row.cells[2])
-        r(new_row.cells[0].paragraphs[0], src, size=9, color=(26,23,20))
-        r(new_row.cells[1].paragraphs[0], "", size=9)
+        for ci in range(3):
+            set_bg(new_row.cells[ci], row_bg)
+            set_cell_margins(new_row.cells[ci])
+        # 자료명: content 내용 요약 (없으면 source 사용)
+        data_name = content_val[:40] + "…" if len(content_val) > 40 else content_val
+        r(new_row.cells[0].paragraphs[0], data_name or src, size=9, color=(26,23,20))
+        r(new_row.cells[1].paragraphs[0], src, size=9, color=(26,23,20))
         r(new_row.cells[2].paragraphs[0], yr, size=9, color=(26,23,20))
 
     doc.add_paragraph().paragraph_format.space_after = Pt(6)
@@ -1585,7 +1610,7 @@ if st.session_state.step == 1:
                     client = get_client()
 
                     prompt = f"""당신은 GEO(Generative Engine Optimization) 전문가입니다.
-아래 브랜드 정보를 분석해서, 소비자가 ChatGPT·Gemini에 실제로 물어볼 법한 GEO 진단 질문 7개를 설계해주세요.
+아래 브랜드 정보를 바탕으로, 소비자가 ChatGPT·Gemini에 실제로 물어볼 법한 GEO 진단 질문 7개를 설계해주세요.
 
 브랜드 정보:
 - 브랜드명: {st.session_state.brand_name}
@@ -1599,22 +1624,30 @@ if st.session_state.step == 1:
 질문 설계 원칙:
 1. 브랜드명이 절대 들어가면 안 됨 (브랜드를 모르는 소비자가 AI에게 묻는 질문)
 2. 실제 소비자가 쓰는 구어체
-3. AIJ 5단계 커버: DISCOVER(2개) / CONSIDER(3개) / DECIDE(2개)
+3. AIJ 단계: DISCOVER(2개) / CONSIDER(3개) / DECIDE(2개)
 4. 브랜드 USP와 직접 연결되는 질문 우선
 5. 부정 이미지 방어 질문 1개 이상 포함
+
+⚠️ data 필드 작성 필수 규칙:
+- 각 질문마다 반드시 실제 존재하는 기관/매체의 데이터 3개를 넣어야 함
+- "출처기관" 같은 템플릿 문자열 절대 금지. 반드시 실제 기관명 사용
+- 실제 기관 예시: 한국소비자원, 식품의약품안전처, 오픈서베이, 네이버 데이터랩, 닐슨코리아, 건강보험심사평가원, 통계청, aT한국농수산식품유통공사, 매일경제, 조선일보, 와이즈앱, 서울대병원, 대한의사협회 등 (카테고리에 맞는 기관 선택)
+- content는 해당 카테고리와 직접 관련된 구체적 수치/통계/트렌드 포함
+- year는 2023~2026 사이 실제 연도
+- check_point는 구체적으로: "{st.session_state.brand_name}이(가) [구체적 맥락]으로 등장하는지 + [{st.session_state.brand_competitors}] 대비 [포지션] 언급 여부" 형식
 
 반드시 아래 JSON 형식으로만 응답 (다른 텍스트 없이):
 {{
   "questions": [
     {{
-      "question": "질문 내용",
+      "question": "질문 내용 (구어체, 브랜드명 없이)",
       "stage": "DISCOVER 또는 CONSIDER 또는 DECIDE",
       "type": "유형명 (예: 카테고리 진입 — 브랜드 선택 첫 질문)",
-      "check_point": "확인 포인트: {st.session_state.brand_name}이 어떤 맥락에서 등장하는지 + 경쟁사 대비 포지션",
+      "check_point": "확인 포인트: {st.session_state.brand_name}이(가) [구체적 맥락]으로 등장하는지 + [{st.session_state.brand_competitors}] 대비 포지션 언급 여부",
       "data": [
-        {{"source": "출처기관", "content": "구체적 데이터 내용", "year": "2024"}},
-        {{"source": "출처기관", "content": "구체적 데이터 내용", "year": "2025"}},
-        {{"source": "출처기관", "content": "구체적 데이터 내용", "year": "2025"}}
+        {{"source": "실제기관명", "content": "구체적 수치 포함한 데이터 내용", "year": "2024"}},
+        {{"source": "실제기관명", "content": "구체적 수치 포함한 데이터 내용", "year": "2025"}},
+        {{"source": "실제기관명", "content": "구체적 수치 포함한 데이터 내용", "year": "2024"}}
       ]
     }}
   ]
@@ -1622,7 +1655,7 @@ if st.session_state.step == 1:
 
                     message = client.messages.create(
                         model="claude-sonnet-4-20250514",
-                        max_tokens=4000,
+                        max_tokens=8000,
                         messages=[{"role": "user", "content": prompt}]
                     )
 
