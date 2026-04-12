@@ -32,6 +32,8 @@ def create_answer_excel():
     RED_HEX   = 'FFFAE2D5'
     WHITE_HEX = 'FFFFFFFF'
     GRAY2_HEX = 'FFFAFAFA'
+    # 헤더용: 브랜드 컬러 연하게 (흰 글씨 대신 어두운 글씨 사용)
+    HEADER_HEX = f'FF{br:02X}{bg:02X}{bb:02X}'
 
     wb = openpyxl.Workbook()
 
@@ -39,7 +41,7 @@ def create_answer_excel():
     ws_info = wb.active
     ws_info.title = "브랜드 정보"
 
-    header_fill = PatternFill("solid", fgColor=DARK_HEX)
+    header_fill = PatternFill("solid", fgColor=HEADER_HEX)
     brand_fill  = PatternFill("solid", fgColor=BRAND_HEX)
     cw_fill     = PatternFill("solid", fgColor=CW_HEX)
     gray_fill   = PatternFill("solid", fgColor=GRAY_HEX)
@@ -68,8 +70,7 @@ def create_answer_excel():
     c = ws_info['A1']
     c.value = f"{st.session_state.brand_name}  GEO 진단 — 브랜드 정보"
     c.fill = header_fill
-    c.font = Font(name='맑은 고딕', size=13, bold=True,
-                  color=f'FF{br:02X}{bg:02X}{bb:02X}')
+    c.font = Font(name='맑은 고딕', size=13, bold=True, color='FFFFFFFF')
     c.alignment = Alignment(horizontal='left', vertical='center')
     ws_info.row_dimensions[1].height = 30
 
@@ -106,7 +107,7 @@ def create_answer_excel():
                "GPT OFF 언급", "GPT ON 언급", "Gemini 언급"]
     for ci, h in enumerate(headers):
         cell_style(ws_ans, 1, ci+1, h, header_fill,
-                   f'FF{br:02X}{bg:02X}{bb:02X}', True, 'center', 10)
+                   'FFFFFFFF', True, 'center', 10)
     ws_ans.row_dimensions[1].height = 25
 
     # 데이터 행
@@ -146,8 +147,7 @@ def create_answer_excel():
     c = ws_b2a['A1']
     c.value = f"B2A 매트릭스 — {st.session_state.brand_name}  |  수집일: {datetime.now().strftime('%Y.%m.%d')}"
     c.fill = header_fill
-    c.font = Font(name='맑은 고딕', size=12, bold=True,
-                  color=f'FF{br:02X}{bg:02X}{bb:02X}')
+    c.font = Font(name='맑은 고딕', size=12, bold=True, color='FFFFFFFF')
     c.alignment = Alignment(horizontal='left', vertical='center')
     ws_b2a.row_dimensions[1].height = 28
 
@@ -187,8 +187,7 @@ def create_answer_excel():
     c = ws_cl['A1']
     c.value = "Claude B2A 분석 결과"
     c.fill = header_fill
-    c.font = Font(name='맑은 고딕', size=12, bold=True,
-                  color=f'FF{br:02X}{bg:02X}{bb:02X}')
+    c.font = Font(name='맑은 고딕', size=12, bold=True, color='FFFFFFFF')
     c.alignment = Alignment(horizontal='left', vertical='center')
     ws_cl.row_dimensions[1].height = 28
 
@@ -209,20 +208,22 @@ def create_answer_excel():
 # [1] 질문지 Word 생성
 # ─────────────────────────────────────────────
 def create_question_word():
-    from docx.oxml.ns import qn
+    from docx.oxml.ns import qn as docx_qn
     from docx.oxml import OxmlElement
     from docx.enum.table import WD_TABLE_ALIGNMENT
 
-    FONT = "페이퍼로지 3 Light"
+    FONT    = "페이퍼로지 3 Light"
     br, bg, bb = brand_rgb()
-    cr, cg, cb = (112, 48, 160)   # #7030A0 크림웍스 퍼플
-    BRAND_HEX   = st.session_state.brand_color.replace('#', '')
-    CW_HEX      = 'EADCF4'        # 연보라 배경
-    YELLOW_HEX  = 'FFCC66'        # 유형 박스 노랑
-    GRAY_HEX    = 'F7F7F7'
-    WHITE_HEX   = 'FFFFFF'
-    GRAY2_HEX   = 'FAFAFA'
-    DARK_HEX    = '1A1A1A'
+    # 크림웍스 퍼플
+    cr, cg, cb = (112, 48, 160)
+    BRAND_HEX  = st.session_state.brand_color.replace('#','')
+    CW_HEX     = 'EADCF4'   # 연보라 (헤더/강조)
+    YELLOW_HEX = 'FFCC66'   # 유형 박스 노랑
+    GRAY_HEX   = 'F7F7F7'
+    WHITE_HEX  = 'FFFFFF'
+    GRAY2_HEX  = 'FAFAFA'
+    NOTICE_HEX = 'FEF9E7'
+    DARK_HEX   = '1A1A14'
 
     doc = Document()
     for section in doc.sections:
@@ -235,9 +236,9 @@ def create_question_word():
         tc = cell._tc
         tcPr = tc.get_or_add_tcPr()
         shd = OxmlElement('w:shd')
-        shd.set(qn('w:val'), 'clear')
-        shd.set(qn('w:color'), 'auto')
-        shd.set(qn('w:fill'), hex_color)
+        shd.set(docx_qn('w:val'), 'clear')
+        shd.set(docx_qn('w:color'), 'auto')
+        shd.set(docx_qn('w:fill'), hex_color)
         tcPr.append(shd)
 
     def r(para, text, size=10, bold=False, color=None, font=FONT, italic=False):
@@ -247,20 +248,32 @@ def create_question_word():
         run.bold        = bold
         run.font.italic = italic
         if color:
-            run.font.color.rgb = RGBColor(*color)
+            try:
+                run.font.color.rgb = RGBColor(int(color[0]), int(color[1]), int(color[2]))
+            except Exception:
+                pass
         return run
 
-    def add_border_para(doc, color_hex, thickness=4):
-        from docx.oxml import OxmlElement
-        from docx.oxml.ns import qn
+    def set_cell_margins(cell, top=80, bottom=80, left=120, right=120):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        tcMar = OxmlElement('w:tcMar')
+        for side, val in [('top',top),('bottom',bottom),('left',left),('right',right)]:
+            node = OxmlElement(f'w:{side}')
+            node.set(docx_qn('w:w'), str(val))
+            node.set(docx_qn('w:type'), 'dxa')
+            tcMar.append(node)
+        tcPr.append(tcMar)
+
+    def add_border_line(doc, color_hex, thickness=6):
         p = doc.add_paragraph()
         pPr = p._p.get_or_add_pPr()
         pBdr = OxmlElement('w:pBdr')
         bot = OxmlElement('w:bottom')
-        bot.set(qn('w:val'), 'single')
-        bot.set(qn('w:sz'), str(thickness))
-        bot.set(qn('w:space'), '1')
-        bot.set(qn('w:color'), color_hex)
+        bot.set(docx_qn('w:val'), 'single')
+        bot.set(docx_qn('w:sz'), str(thickness))
+        bot.set(docx_qn('w:space'), '1')
+        bot.set(docx_qn('w:color'), color_hex)
         pBdr.append(bot)
         pPr.append(pBdr)
         p.paragraph_format.space_before = Pt(0)
@@ -268,16 +281,17 @@ def create_question_word():
         return p
 
     # ── 표지 ──
-    p_logo = doc.add_paragraph()
-    p_logo.paragraph_format.space_before = Pt(0)
-    p_logo.paragraph_format.space_after  = Pt(2)
-    r(p_logo, "CREAMWORKS  |  GEO 컨설팅 제안서  |  Confidential", size=9, color=(85,85,85))
+    p_header = doc.add_paragraph()
+    p_header.paragraph_format.space_before = Pt(0)
+    p_header.paragraph_format.space_after  = Pt(2)
+    r(p_header, "CREAMWORKS  |  GEO 컨설팅 제안서  |  Confidential",
+      size=9, color=(85,85,85))
 
-    add_border_para(doc, BRAND_HEX, thickness=6)
+    add_border_line(doc, BRAND_HEX, thickness=6)
 
     p_brand = doc.add_paragraph()
-    p_brand.paragraph_format.space_before = Pt(60)
-    p_brand.paragraph_format.space_after  = Pt(8)
+    p_brand.paragraph_format.space_before = Pt(40)
+    p_brand.paragraph_format.space_after  = Pt(6)
     r(p_brand, st.session_state.brand_name, size=36, color=(26,23,20))
 
     p_sub = doc.add_paragraph()
@@ -285,100 +299,161 @@ def create_question_word():
     p_sub.paragraph_format.space_after  = Pt(6)
     r(p_sub, "AI 진단 질문지", size=18, color=(cr,cg,cb))
 
-    p_desc = doc.add_paragraph()
-    p_desc.paragraph_format.space_before = Pt(0)
-    p_desc.paragraph_format.space_after  = Pt(60)
-    r(p_desc, f"Presented by CREAMWORKS  ·  {datetime.now().strftime('%Y.%m')}", size=10, color=(85,85,85))
+    p_date = doc.add_paragraph()
+    p_date.paragraph_format.space_before = Pt(0)
+    p_date.paragraph_format.space_after  = Pt(40)
+    r(p_date, f"Presented by CREAMWORKS  ·  {datetime.now().strftime('%Y.%m')}",
+      size=10, color=(85,85,85))
 
     doc.add_page_break()
 
     # ── 실행 전 필수 세팅 ──
     p_h = doc.add_paragraph()
-    r(p_h, "실행 전 필수 세팅", size=14, bold=True, color=(26,23,20))
     p_h.paragraph_format.space_after = Pt(8)
+    r(p_h, "실행 전 필수 세팅", size=14, bold=True, color=(26,23,20))
 
     setup_table = doc.add_table(rows=2, cols=2)
     setup_table.style = 'Table Grid'
     setup_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # 열 너비 설정
+    from docx.shared import Cm as DocxCm
+    for row in setup_table.rows:
+        row.cells[0].width = DocxCm(3.0)
+        row.cells[1].width = DocxCm(13.0)
+
     setup_data = [
         ("ChatGPT",
          "① 메모리 OFF → 검색 OFF  (새 채팅 시작 후 메모리·검색 모두 비활성화)\n② 메모리 OFF → 검색 ON  (새 채팅 시작 후 검색만 활성화)"),
         ("Gemini",
          "③ 시크릿 모드 → gemini.google.com 접속  (로그아웃 상태에서 질문)"),
     ]
-    for row_i, (label, content) in enumerate(setup_data):
-        set_bg(setup_table.rows[row_i].cells[0], DARK_HEX)
-        set_bg(setup_table.rows[row_i].cells[1], GRAY_HEX)
-        r(setup_table.rows[row_i].cells[0].paragraphs[0], label, size=10, bold=True, color=(br,bg,bb))
-        r(setup_table.rows[row_i].cells[1].paragraphs[0], content, size=9.5, color=(26,23,20))
+    for ri, (label, content) in enumerate(setup_data):
+        set_bg(setup_table.rows[ri].cells[0], DARK_HEX)
+        set_bg(setup_table.rows[ri].cells[1], GRAY_HEX)
+        set_cell_margins(setup_table.rows[ri].cells[0])
+        set_cell_margins(setup_table.rows[ri].cells[1])
+        rp = setup_table.rows[ri].cells[0].paragraphs[0]
+        r(rp, label, size=10, bold=True, color=(br,bg,bb))
+        cp = setup_table.rows[ri].cells[1].paragraphs[0]
+        r(cp, content, size=9.5, color=(26,23,20))
 
     doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
+    # 주의사항 박스
     notice_t = doc.add_table(rows=1, cols=1)
     notice_t.style = 'Table Grid'
-    set_bg(notice_t.rows[0].cells[0], 'FEF9E7')
-    np = notice_t.rows[0].cells[0].paragraphs[0]
-    r(np, "📌  각 질문은 새 채팅에서 입력하지 않고, 동일한 채팅 내에서 Q1→Q7 순서대로 연속 입력합니다.\n"
-          "📌  답변은 복사해서 별도 파일에 Q번호와 함께 저장해주세요. (예: Q1_GPT검색OFF.txt)", size=9.5, color=(26,23,20))
+    set_bg(notice_t.rows[0].cells[0], NOTICE_HEX)
+    set_cell_margins(notice_t.rows[0].cells[0])
+    np_ = notice_t.rows[0].cells[0].paragraphs[0]
+    r(np_, "📌  각 질문은 새 채팅에서 입력하지 않고, 동일한 채팅 내에서 Q1→Q7 순서대로 연속 입력합니다.\n"
+           "📌  답변은 복사해서 별도 파일에 Q번호와 함께 저장해주세요. (예: Q1_GPT검색OFF.txt)",
+      size=9.5, color=(26,23,20))
 
     doc.add_paragraph().paragraph_format.space_after = Pt(4)
 
     p_h2 = doc.add_paragraph()
-    r(p_h2, "진단 질문 7개", size=14, bold=True, color=(26,23,20))
     p_h2.paragraph_format.space_after = Pt(8)
+    r(p_h2, "진단 질문 7개", size=14, bold=True, color=(26,23,20))
 
     # ── Q1~Q7 ──
-    ai_keys = ['off','on','gem']
     for i, q_data in enumerate(st.session_state.questions):
-        n     = i + 1
-        q_txt = q_data.get('question','')
-        qtype = q_data.get('type','')
-        check = q_data.get('check_point','')
-        dlist = q_data.get('data',[])
+        n      = i + 1
+        q_txt  = q_data.get('question','')
+        qtype  = q_data.get('type','')
+        check  = q_data.get('check_point','')
+        dlist  = q_data.get('data',[])
 
-        # Q 헤더 행
-        qt = doc.add_table(rows=1, cols=1)
-        qt.style = 'Table Grid'
-        set_bg(qt.rows[0].cells[0], DARK_HEX)
-        qp = qt.rows[0].cells[0].paragraphs[0]
-        r(qp, f"Q{n}.", size=12, bold=True, color=(br,bg,bb))
+        # Q 헤더 행 (브랜드컬러 배경)
+        q_hdr = doc.add_table(rows=1, cols=1)
+        q_hdr.style = 'Table Grid'
+        set_bg(q_hdr.rows[0].cells[0], BRAND_HEX)
+        set_cell_margins(q_hdr.rows[0].cells[0])
+        qp = q_hdr.rows[0].cells[0].paragraphs[0]
+        r(qp, f"Q{n}.", size=12, bold=True, color=(255,255,255))
         r(qp, f"  {q_txt}", size=12, bold=True, color=(255,255,255))
 
-        # 유형 + 확인포인트
+        # 유형 + 확인포인트 행
         type_t = doc.add_table(rows=1, cols=2)
         type_t.style = 'Table Grid'
         set_bg(type_t.rows[0].cells[0], YELLOW_HEX)
         set_bg(type_t.rows[0].cells[1], GRAY_HEX)
+        set_cell_margins(type_t.rows[0].cells[0])
+        set_cell_margins(type_t.rows[0].cells[1])
         tp = type_t.rows[0].cells[0].paragraphs[0]
         r(tp, "유형\n", size=9, color=(85,85,85))
         r(tp, qtype, size=9, color=(85,85,85))
-        cp = type_t.rows[0].cells[1].paragraphs[0]
-        r(cp, f"확인 포인트 : {check}", size=9, color=(85,85,85))
+        cp_ = type_t.rows[0].cells[1].paragraphs[0]
+        r(cp_, f"확인 포인트 : {check}", size=9, color=(85,85,85))
 
-        # 데이터 표
+        # 데이터 표 헤더
         data_rows = 1 + len(dlist)
         dt = doc.add_table(rows=data_rows, cols=3)
         dt.style = 'Table Grid'
-        for col_i, h_txt in enumerate(["출처","데이터","연도"]):
-            set_bg(dt.rows[0].cells[col_i], CW_HEX)
-            r(dt.rows[0].cells[col_i].paragraphs[0], h_txt, size=9, bold=True, color=(85,85,85))
+        for ci, h_txt in enumerate(["출처","데이터","연도"]):
+            set_bg(dt.rows[0].cells[ci], CW_HEX)
+            set_cell_margins(dt.rows[0].cells[ci])
+            r(dt.rows[0].cells[ci].paragraphs[0],
+              h_txt, size=9, bold=True, color=(85,85,85))
+
+        # 데이터 행
         for j, d in enumerate(dlist):
             row_bg = WHITE_HEX if j%2==0 else GRAY2_HEX
-            for col_i, val in enumerate([
+            for ci, val in enumerate([
                 d.get('source',''), d.get('content',''), d.get('year','')
             ]):
-                set_bg(dt.rows[j+1].cells[col_i], row_bg)
-                r(dt.rows[j+1].cells[col_i].paragraphs[0], val, size=9, color=(26,23,20))
+                set_bg(dt.rows[j+1].cells[ci], row_bg)
+                set_cell_margins(dt.rows[j+1].cells[ci])
+                r(dt.rows[j+1].cells[ci].paragraphs[0],
+                  val, size=9, color=(26,23,20))
 
-        # 인사이트 박스
+        # 인사이트 박스 (연보라 배경)
         ins_t = doc.add_table(rows=1, cols=1)
         ins_t.style = 'Table Grid'
         set_bg(ins_t.rows[0].cells[0], CW_HEX)
+        set_cell_margins(ins_t.rows[0].cells[0])
         ip = ins_t.rows[0].cells[0].paragraphs[0]
         r(ip, "→  ", size=9, bold=True, color=(cr,cg,cb))
-        r(ip, f"이 질문에서 {st.session_state.brand_name}이 어떻게 언급되는지 확인하세요.", size=9, color=(26,23,20))
+        r(ip, f"이 질문에서 {st.session_state.brand_name}이 어떻게 언급되는지 확인하세요.",
+          size=9, color=(26,23,20))
 
-        doc.add_paragraph().paragraph_format.space_after = Pt(6)
+        sp = doc.add_paragraph()
+        sp.paragraph_format.space_after = Pt(8)
+
+    # ── 질문 선정 근거 요약 ──
+    doc.add_page_break()
+    p_sum = doc.add_paragraph()
+    p_sum.paragraph_format.space_after = Pt(8)
+    r(p_sum, "질문 선정 근거 요약", size=14, bold=True, color=(26,23,20))
+
+    sum_t = doc.add_table(rows=1, cols=3)
+    sum_t.style = 'Table Grid'
+    for ci, h_txt in enumerate(["자료명","발행처","연도"]):
+        set_bg(sum_t.rows[0].cells[ci], CW_HEX)
+        set_cell_margins(sum_t.rows[0].cells[ci])
+        r(sum_t.rows[0].cells[ci].paragraphs[0],
+          h_txt, size=9, bold=True, color=(85,85,85))
+
+    # 각 질문의 데이터 소스를 취합
+    all_sources = {}
+    for q_data in st.session_state.questions:
+        for d in q_data.get('data',[]):
+            key = d.get('source','')
+            if key and key not in all_sources:
+                all_sources[key] = d.get('year','')
+    for idx, (src, yr) in enumerate(all_sources.items()):
+        row_bg = WHITE_HEX if idx%2==0 else GRAY2_HEX
+        new_row = sum_t.add_row()
+        set_bg(new_row.cells[0], row_bg)
+        set_bg(new_row.cells[1], row_bg)
+        set_bg(new_row.cells[2], row_bg)
+        set_cell_margins(new_row.cells[0])
+        set_cell_margins(new_row.cells[1])
+        set_cell_margins(new_row.cells[2])
+        r(new_row.cells[0].paragraphs[0], src, size=9, color=(26,23,20))
+        r(new_row.cells[1].paragraphs[0], "", size=9)
+        r(new_row.cells[2].paragraphs[0], yr, size=9, color=(26,23,20))
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
 
     # 푸터
     fp = doc.add_paragraph()
@@ -391,9 +466,6 @@ def create_question_word():
     return buf
 
 
-# ─────────────────────────────────────────────
-# [2] 질문지 PPT 생성
-# ─────────────────────────────────────────────
 def create_question_ppt():
     FONT_M  = "페이퍼로지 5 Medium"
     FONT_R  = "페이퍼로지 4 Regular"
@@ -631,7 +703,11 @@ def create_proposal_word():
         run.font.size = Pt(size)
         run.bold = bold
         if color:
-            run.font.color.rgb = RGBColor(*color)
+            try:
+                run.font.color.rgb = RGBColor(
+                    int(color[0]), int(color[1]), int(color[2]))
+            except Exception:
+                pass
         return run
 
     def add_border_para(doc, color_hex, thickness=4):
@@ -1171,6 +1247,20 @@ st.markdown(f"""
       margin-right: 8px;
   }}
   .divider {{ border: none; border-top: 1px solid #eee; margin: 1.5rem 0; }}
+
+  /* 연두색 액션 버튼 */
+  div[data-testid="stButton"] button[kind="primary"] {{
+      background-color: #52B788 !important;
+      border-color: #52B788 !important;
+      color: white !important;
+      font-weight: 600 !important;
+      max-width: 320px !important;
+      border-radius: 8px !important;
+  }}
+  div[data-testid="stButton"] button[kind="primary"]:hover {{
+      background-color: #40916C !important;
+      border-color: #40916C !important;
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1182,7 +1272,7 @@ def init():
         'step': 1,
         'api_key': '',
         'brand_name': '',
-        'brand_color': '#000000',
+        'brand_color': '#4A90D9',
         'brand_category': '',
         'brand_usp': '',
         'brand_target': '',
@@ -1309,8 +1399,11 @@ if st.session_state.step == 1:
                       border-radius:6px;border:1px solid #ddd;"></div>
           <span style="font-size:0.82rem;color:#666">{bc_preview} — 보고서·질문지에 자동 적용됩니다</span>
         </div>
+        <div style="font-size:0.78rem;color:#aaa;margin-bottom:4px">
+          구글에 "{st.session_state.brand_name or '브랜드명'} 브랜드 컬러 HEX" 검색 후 입력하세요
+        </div>
         <div style="font-size:0.78rem;color:#aaa;margin-bottom:8px">
-          모르시면 구글에 "{st.session_state.brand_name or '브랜드명'} 브랜드 컬러" 검색
+          예) 교촌치킨 → #F9BA15 &nbsp;|&nbsp; 드시모네 → #01C49C &nbsp;|&nbsp; 크림웍스 → #7C5CBF
         </div>
         """, unsafe_allow_html=True)
 
@@ -1345,7 +1438,11 @@ if st.session_state.step == 1:
 
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
-    if st.button("🔍  질문 7개 생성하기", type="primary", use_container_width=True):
+    col_btn, col_empty = st.columns([2, 3])
+    with col_btn:
+        clicked = st.button("🔍  질문 7개 생성하기", type="primary", use_container_width=True)
+
+    if clicked:
         # 유효성 검사
         if not st.session_state.api_key:
             st.error("Anthropic API Key를 입력해주세요.")
@@ -1460,7 +1557,7 @@ elif st.session_state.step == 2:
             q_updated['question'] = new_q
             updated_qs.append(q_updated)
 
-    col_back, col_confirm = st.columns([1, 3])
+    col_back, col_confirm, col_empty2 = st.columns([1, 2, 2])
     with col_back:
         if st.button("← 다시 입력", use_container_width=True):
             st.session_state.step = 1
@@ -1574,7 +1671,7 @@ elif st.session_state.step == 3:
             st.success(f"Excel 파일이 생성되었습니다! ({total}/21개 답변 저장)")
 
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
-    col_back, col_next = st.columns([1, 3])
+    col_back, col_next, col_empty3 = st.columns([1, 2, 2])
     with col_back:
         if st.button("← 질문 수정", use_container_width=True):
             st.session_state.step = 2
