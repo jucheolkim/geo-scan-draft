@@ -1,14 +1,22 @@
 import streamlit as st
 import anthropic
-import io
-import json
-from datetime import datetime
-import openpyxl
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+from docx import Document
+from docx.shared import RGBColor, Pt, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from pptx import Presentation
+from pptx.util import Inches, Pt as PPTXPt, Emu, Cm as PPTXCm
+from pptx.dml.color import RGBColor as PPTXRGBColor
+from pptx.enum.text import PP_ALIGN
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
+import io
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 
+def brand_rgb():
+    return hex_to_rgb(st.session_state.brand_color)
 
 
 # ─────────────────────────────────────────────
@@ -89,11 +97,11 @@ def load_from_excel(uploaded_file):
 
     # ── 파일 타입 판별 ──
     if has_analysis and st.session_state.get('analysis_result', '').strip():
-        # 전체데이터: STEP 4로
+        # 전체데이터: STEP 5로
         st.session_state.overall_diagnosis  = st.session_state.analysis_result[:300]
         st.session_state.cw_insights        = [''] * 7
         st.session_state.priority_actions   = ''
-        st.session_state.step = 4
+        st.session_state.step = 5
         return 'full'
     else:
         # 답변수집: STEP 4로
@@ -292,6 +300,981 @@ def create_answer_excel():
     buf.seek(0)
     return buf
 
+# ─────────────────────────────────────────────
+# [1] 질문지 Word 생성
+# ─────────────────────────────────────────────
+def create_question_word():
+    from docx.oxml.ns import qn as docx_qn
+    from docx.oxml import OxmlElement
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.shared import Cm as DocxCm
+
+    FONT = "페이퍼로지 3 Light"
+    br, bg, bb = brand_rgb()
+    cr, cg, cb = (112, 48, 160)          # 크림웍스 퍼플 #7030A0
+    BRAND_HEX = st.session_state.brand_color.replace('#', '')
+
+    # 유형 박스: 브랜드 컬러 50% 연하게
+    lr = int(br + (255 - br) * 0.5)
+    lg = int(bg + (255 - bg) * 0.5)
+    lb = int(bb + (255 - bb) * 0.5)
+    BRAND_LIGHT_HEX = f'{lr:02X}{lg:02X}{lb:02X}'
+
+    CW_HEX    = 'EADCF4'   # 연보라 (헤더/강조/인사이트)
+    GRAY_HEX  = 'F7F7F7'
+    WHITE_HEX = 'FFFFFF'
+    GRAY2_HEX = 'FAFAFA'
+
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin    = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin   = Cm(2.2)
+        section.right_margin  = Cm(2.2)
+
+    # ── 셀 배경색 설정 ──
+    def set_bg(cell, hex_color):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        # 기존 shd 제거 후 새로 추가
+        for old in tcPr.findall(f'{{{docx_qn("w:shd").split("}")[0][1:]}}}shd'):
+            tcPr.remove(old)
+        shd = OxmlElement('w:shd')
+        shd.set(docx_qn('w:val'), 'clear')
+        shd.set(docx_qn('w:color'), 'auto')
+        shd.set(docx_qn('w:fill'), hex_color)
+        tcPr.append(shd)
+
+    # ── 셀 내부 여백 ──
+    def set_cell_margins(cell, top=60, bottom=60, left=120, right=120):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        tcMar = OxmlElement('w:tcMar')
+        for side, val in [('top',top),('bottom',bottom),('left',left),('right',right)]:
+            node = OxmlElement(f'w:{side}')
+            node.set(docx_qn('w:w'), str(val))
+            node.set(docx_qn('w:type'), 'dxa')
+            tcMar.append(node)
+        tcPr.append(tcMar)
+
+    # ── 텍스트 추가 ──
+    def r(para, text, size=None, bold=False, color=None, font=FONT):
+        run = para.add_run(text)
+        run.font.name = font
+        if size:
+            run.font.size = Pt(size)
+        run.bold = bold
+        if color:
+            try:
+                run.font.color.rgb = RGBColor(int(color[0]), int(color[1]), int(color[2]))
+            except Exception:
+                pass
+        return run
+
+    # ── 단락 테두리 라인 ──
+    def add_border_line(doc, color_hex, thickness=4):
+        p = doc.add_paragraph()
+        pPr = p._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bot = OxmlElement('w:bottom')
+        bot.set(docx_qn('w:val'), 'single')
+        bot.set(docx_qn('w:sz'), str(thickness))
+        bot.set(docx_qn('w:space'), '1')
+        bot.set(docx_qn('w:color'), color_hex)
+        pBdr.append(bot)
+        pPr.append(pBdr)
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(2)
+        return p
+
+    # ════════════════════════════════
+    # 표지
+    # ════════════════════════════════
+    p0 = doc.add_paragraph()
+    p0.paragraph_format.space_before = Pt(0)
+    p0.paragraph_format.space_after  = Pt(2)
+    r(p0, "CREAMWORKS  ×", size=14, color=(124, 92, 191))  # 크림웍스 퍼플
+
+    add_border_line(doc, BRAND_HEX, thickness=4)
+
+    p1 = doc.add_paragraph()
+    p1.paragraph_format.space_before = Pt(6)
+    p1.paragraph_format.space_after  = Pt(4)
+    r(p1, st.session_state.brand_name, size=32, color=(26, 23, 20))
+
+    p2 = doc.add_paragraph()
+    p2.paragraph_format.space_before = Pt(0)
+    p2.paragraph_format.space_after  = Pt(4)
+    r(p2, "AI 진단 질문지", size=18, color=(cr, cg, cb))
+
+    p3 = doc.add_paragraph()
+    p3.paragraph_format.space_before = Pt(0)
+    p3.paragraph_format.space_after  = Pt(30)
+    r(p3, f"Presented by CREAMWORKS  ·  {datetime.now().strftime('%Y.%m')}", color=(117, 117, 117))
+
+    doc.add_page_break()
+
+    # ════════════════════════════════
+    # 실행 전 필수 세팅
+    # ════════════════════════════════
+    p_h = doc.add_paragraph()
+    p_h.paragraph_format.space_before = Pt(0)
+    p_h.paragraph_format.space_after  = Pt(8)
+    r(p_h, "실행 전 필수 세팅", size=12)
+
+    # ChatGPT / Gemini 세팅표 (배경: CW_HEX 연보라)
+    setup_t = doc.add_table(rows=2, cols=2)
+    setup_t.style = 'Table Grid'
+    setup_data = [
+        ("ChatGPT",
+         "① 메모리 OFF → 검색 OFF  (새 채팅 시작 후 메모리·검색 모두 비활성화)\n"
+         "② 메모리 OFF → 검색 ON  (새 채팅 시작 후 검색만 활성화)"),
+        ("Gemini",
+         "③ 시크릿 모드 → gemini.google.com 접속  (로그아웃 상태에서 질문)"),
+    ]
+    for ri, (label, content) in enumerate(setup_data):
+        set_bg(setup_t.rows[ri].cells[0], CW_HEX)
+        set_bg(setup_t.rows[ri].cells[1], GRAY_HEX)
+        set_cell_margins(setup_t.rows[ri].cells[0])
+        set_cell_margins(setup_t.rows[ri].cells[1])
+        r(setup_t.rows[ri].cells[0].paragraphs[0], label, color=(26, 23, 20))
+        r(setup_t.rows[ri].cells[1].paragraphs[0], content, size=9.5, color=(26, 23, 20))
+
+    sp = doc.add_paragraph()
+    sp.paragraph_format.space_after = Pt(4)
+
+    # 주의사항 박스 (배경: CW_HEX)
+    notice_t = doc.add_table(rows=1, cols=1)
+    notice_t.style = 'Table Grid'
+    set_bg(notice_t.rows[0].cells[0], CW_HEX)
+    set_cell_margins(notice_t.rows[0].cells[0])
+    np_ = notice_t.rows[0].cells[0].paragraphs[0]
+    r(np_, "📌", font="Segoe UI Emoji", color=(85, 85, 85))
+    r(np_, "  각 질문은 새 채팅에서 입력하지 않고, 동일한 채팅 내에서 Q1→Q7 순서대로 연속 입력합니다.\n", size=9.5, color=(85, 85, 85))
+    r(np_, "📌", font="Segoe UI Emoji", color=(85, 85, 85))
+    r(np_, "  답변은 복사해서 별도 파일에 Q번호와 함께 저장해주세요. (예: Q1_GPT검색OFF.txt)", size=9.5, color=(85, 85, 85))
+
+    sp2 = doc.add_paragraph()
+    sp2.paragraph_format.space_after = Pt(8)
+
+    # ════════════════════════════════
+    # 진단 질문 7개 헤더
+    # ════════════════════════════════
+    p_h2 = doc.add_paragraph()
+    p_h2.paragraph_format.space_before = Pt(0)
+    p_h2.paragraph_format.space_after  = Pt(8)
+    r(p_h2, "진단 질문 7개", size=16)
+
+    # ════════════════════════════════
+    # Q1 ~ Q7
+    # ════════════════════════════════
+    for i, q_data in enumerate(st.session_state.questions):
+        n     = i + 1
+        q_txt = q_data.get('question', '')
+        qtype = q_data.get('type', '')
+        check = q_data.get('check_point', '')
+        dlist = q_data.get('data', [])
+        stage = q_data.get('stage', '')
+
+        # ── Q번호 + 질문 (문단, 표 아님) ──
+        pq = doc.add_paragraph()
+        pq.paragraph_format.space_before = Pt(8)
+        pq.paragraph_format.space_after  = Pt(3)
+        r(pq, f"Q{n}.  ", size=14, color=(br, bg, bb))   # 브랜드 컬러
+        r(pq, q_txt, size=14, color=(26, 23, 20))
+
+        # ── 유형 + 확인포인트 표 ──
+        type_t = doc.add_table(rows=1, cols=2)
+        type_t.style = 'Table Grid'
+        set_bg(type_t.rows[0].cells[0], BRAND_LIGHT_HEX)  # 브랜드 컬러 연하게
+        set_bg(type_t.rows[0].cells[1], GRAY_HEX)
+        set_cell_margins(type_t.rows[0].cells[0])
+        set_cell_margins(type_t.rows[0].cells[1])
+
+        tp = type_t.rows[0].cells[0].paragraphs[0]
+        r(tp, "유형", color=(85, 85, 85))
+        tp.add_run('\n')
+        r(tp, qtype, color=(26, 23, 20))
+
+        cp_ = type_t.rows[0].cells[1].paragraphs[0]
+        r(cp_, "확인 포인트 : ", color=(85, 85, 85))
+        # check_point에서 "확인 포인트:" 접두어가 중복되면 제거
+        clean_check = check.replace('확인 포인트:', '').replace('확인 포인트 :', '').strip()
+        r(cp_, clean_check, color=(26, 23, 20))
+
+        # ── 📊 선정 근거 데이터 (문단) ──
+        pd_ = doc.add_paragraph()
+        pd_.paragraph_format.space_before = Pt(6)
+        pd_.paragraph_format.space_after  = Pt(2)
+        r(pd_, "📊", font="Segoe UI Emoji", color=(85, 85, 85))
+        r(pd_, "  선정 근거 데이터", color=(85, 85, 85))
+
+        # ── 데이터 표 (출처/데이터/연도) ──
+        data_rows = max(len(dlist), 1)
+        dt = doc.add_table(rows=data_rows + 1, cols=3)
+        dt.style = 'Table Grid'
+
+        # 헤더
+        for ci, h_txt in enumerate(["출처", "데이터", "연도"]):
+            set_bg(dt.rows[0].cells[ci], CW_HEX)
+            set_cell_margins(dt.rows[0].cells[ci])
+            r(dt.rows[0].cells[ci].paragraphs[0], h_txt, color=(85, 85, 85))
+
+        # 데이터 행
+        for j, d in enumerate(dlist):
+            row_bg = WHITE_HEX if j % 2 == 0 else GRAY2_HEX
+            for ci in range(3):
+                set_bg(dt.rows[j+1].cells[ci], row_bg)
+                set_cell_margins(dt.rows[j+1].cells[ci])
+            r(dt.rows[j+1].cells[0].paragraphs[0], d.get('source', ''), color=(26, 23, 20))
+            r(dt.rows[j+1].cells[1].paragraphs[0], d.get('content', ''), color=(26, 23, 20))
+            r(dt.rows[j+1].cells[2].paragraphs[0], d.get('year', ''), color=(26, 23, 20))
+
+        # ── 인사이트 박스 (배경: CW_HEX) ──
+        ins_t = doc.add_table(rows=1, cols=1)
+        ins_t.style = 'Table Grid'
+        set_bg(ins_t.rows[0].cells[0], CW_HEX)
+        set_cell_margins(ins_t.rows[0].cells[0])
+        ip = ins_t.rows[0].cells[0].paragraphs[0]
+        r(ip, "→  ", color=(0, 0, 0))
+        r(ip, clean_check if clean_check else f"이 질문에서 {st.session_state.brand_name}이(가) 어떻게 언급되는지 + 경쟁사 대비 포지션을 확인하세요.", color=(0, 0, 0))
+
+        sp3 = doc.add_paragraph()
+        sp3.paragraph_format.space_after = Pt(6)
+
+    # ════════════════════════════════
+    # 질문 선정 근거 요약
+    # ════════════════════════════════
+    doc.add_page_break()
+    p_sum = doc.add_paragraph()
+    p_sum.paragraph_format.space_after = Pt(4)
+    r(p_sum, "질문 선정 근거 요약", size=14)
+
+    p_sum_desc = doc.add_paragraph()
+    p_sum_desc.paragraph_format.space_after = Pt(8)
+    r(p_sum_desc, "이 7개 질문은 다음 자료를 교차 분석해 도출했습니다.", size=9.5, color=(85, 85, 85))
+
+    sum_t = doc.add_table(rows=1, cols=3)
+    sum_t.style = 'Table Grid'
+    for ci, h_txt in enumerate(["자료명", "발행처", "연도"]):
+        set_bg(sum_t.rows[0].cells[ci], CW_HEX)
+        set_cell_margins(sum_t.rows[0].cells[ci])
+        r(sum_t.rows[0].cells[ci].paragraphs[0], h_txt, size=9, color=(85, 85, 85))
+
+    # 데이터 소스 취합 (source → (content, year))
+    all_sources = {}
+    for q_data in st.session_state.questions:
+        for d in q_data.get('data', []):
+            src = d.get('source', '').strip()
+            if src and src not in all_sources:
+                all_sources[src] = (d.get('content', ''), d.get('year', ''))
+
+    for idx, (src, (content_val, yr)) in enumerate(all_sources.items()):
+        row_bg = WHITE_HEX if idx % 2 == 0 else GRAY2_HEX
+        new_row = sum_t.add_row()
+        for ci in range(3):
+            set_bg(new_row.cells[ci], row_bg)
+            set_cell_margins(new_row.cells[ci])
+        # 자료명: content 앞부분 (40자)
+        data_name = content_val[:40] + "…" if len(content_val) > 40 else content_val
+        r(new_row.cells[0].paragraphs[0], data_name or src, size=9, color=(26, 23, 20))
+        r(new_row.cells[1].paragraphs[0], src, size=9, color=(26, 23, 20))
+        r(new_row.cells[2].paragraphs[0], yr, size=9, color=(26, 23, 20))
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # 푸터
+    fp = doc.add_paragraph()
+    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r(fp, "CREAMWORKS  —  AI가 좋아하는 브랜드를 만듭니다", size=9, color=(85, 85, 85))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+def create_question_ppt():
+    FONT_M  = "페이퍼로지 5 Medium"
+    FONT_R  = "페이퍼로지 4 Regular"
+    FONT_L  = "페이퍼로지 3 Light"
+    br, bg, bb = brand_rgb()
+    BRAND_RGB = PPTXRGBColor(br, bg, bb)
+    CW_PURPLE = PPTXRGBColor(83, 39, 168)   # #5327A8
+    CW_LIGHT  = PPTXRGBColor(124, 92, 191)  # #7C5CBF
+    DARK      = PPTXRGBColor(26, 23, 20)
+    GRAY      = PPTXRGBColor(85, 85, 85)
+    WHITE     = PPTXRGBColor(255, 255, 255)
+    YELLOW    = PPTXRGBColor(255, 204, 102)  # #FFCC66
+
+    W = Inches(13.33)
+    H = Inches(7.50)
+
+    prs = Presentation()
+    prs.slide_width  = W
+    prs.slide_height = H
+
+    blank_layout = prs.slide_layouts[6]
+
+    def add_textbox(slide, left, top, width, height, text, font_name=FONT_L,
+                    font_size=16, bold=False, color=None, align=PP_ALIGN.LEFT, wrap=True):
+        txBox = slide.shapes.add_textbox(
+            PPTXCm(left), PPTXCm(top), PPTXCm(width), PPTXCm(height))
+        tf = txBox.text_frame
+        tf.word_wrap = wrap
+        p = tf.paragraphs[0]
+        p.alignment = align
+        run = p.add_run()
+        run.text = text
+        run.font.name = font_name
+        run.font.size = PPTXPt(font_size)
+        run.font.bold = bold
+        if color:
+            run.font.color.rgb = color
+        return txBox
+
+    def add_rect(slide, left, top, width, height, fill_color, line_color=None):
+        shape = slide.shapes.add_shape(
+            1,  # MSO_SHAPE_TYPE.RECTANGLE
+            PPTXCm(left), PPTXCm(top), PPTXCm(width), PPTXCm(height)
+        )
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = fill_color
+        if line_color:
+            shape.line.color.rgb = line_color
+        else:
+            shape.line.fill.background()
+        return shape
+
+    def add_table_ppt(slide, left, top, width, rows, cols, data, header_bg, row_bgs):
+        table = slide.shapes.add_table(rows, cols,
+            PPTXCm(left), PPTXCm(top), PPTXCm(width), PPTXCm(3.5)).table
+        col_widths = [PPTXCm(3.0), PPTXCm(width-5.0), PPTXCm(2.0)]
+        for ci in range(min(cols, len(col_widths))):
+            table.columns[ci].width = col_widths[ci]
+        for ri, row_data in enumerate(data):
+            bg = header_bg if ri == 0 else row_bgs[ri % 2]
+            for ci, val in enumerate(row_data):
+                cell = table.cell(ri, ci)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = bg
+                tf = cell.text_frame
+                tf.word_wrap = True
+                p = tf.paragraphs[0]
+                run = p.add_run()
+                run.text = val
+                run.font.name = FONT_L
+                run.font.size = PPTXPt(12)
+                if ri == 0:
+                    run.font.bold  = True
+                    run.font.color.rgb = WHITE
+                else:
+                    run.font.color.rgb = DARK
+        return table
+
+    # ── 슬라이드 1: 표지 (이미지형) ──
+    slide1 = prs.slides.add_slide(blank_layout)
+    cover_rect = add_rect(slide1, 0, 0, 33.87, 19.05,
+                          PPTXRGBColor(245, 245, 245))
+
+    # 세로 강조선
+    add_rect(slide1, 8.56, 4.55, 0.46, 5.39, CW_PURPLE)
+
+    # 제목
+    add_textbox(slide1, 9.38, 4.73, 12.0, 1.81,
+                "크림웍스\nGEO 컨설팅", FONT_M, 36, False, DARK)
+    add_textbox(slide1, 9.38, 6.55, 7.0, 1.27,
+                "[2. AI 진단 설문지]", FONT_R, 24, False, DARK)
+    add_textbox(slide1, 9.38, 7.73, 14.1, 1.63,
+                f"AI 검색시대, 브랜드가 ChatGPT·Gemini에서 발견되고\n추천되기 위해 체계적인 설문지를 만드는 프로세스입니다",
+                FONT_R, 16, False, DARK)
+    add_textbox(slide1, 11.20, 17.69, 11.47, 0.86,
+                "CREAMWORKS  - AI가 좋아하는 브랜드를 만듭니다",
+                FONT_M, 14, False, CW_PURPLE)
+
+    # ── 슬라이드 2: 실행 세팅 ──
+    slide2 = prs.slides.add_slide(blank_layout)
+    add_textbox(slide2, 1.25, 2.24, 7.32, 1.45,
+                "실행 전 필수 세팅", FONT_R, 28, False, DARK)
+
+    # 구분선
+    line = slide2.shapes.add_shape(1,
+        PPTXCm(1.25), PPTXCm(3.71), PPTXCm(31.37), PPTXCm(0.03))
+    line.fill.solid()
+    line.fill.fore_color.rgb = BRAND_RGB
+    line.line.fill.background()
+
+    # ChatGPT 박스
+    add_rect(slide2, 1.98, 5.46, 13.23, 7.19, PPTXRGBColor(255, 248, 240))
+    add_textbox(slide2, 2.29, 5.97, 3.0, 0.91, "ChatGPT", FONT_R, 18, True, BRAND_RGB)
+    add_textbox(slide2, 2.29, 6.88, 12.5, 1.78,
+                "① 메모리 OFF → 검색 OFF\n    새 채팅 시작 후 메모리·검색 모두 비활성화\n② 메모리 OFF → 검색 ON\n    새 채팅 시작 후 검색만 활성화",
+                FONT_L, 14, False, DARK)
+
+    # Gemini 박스
+    add_rect(slide2, 16.51, 5.46, 13.23, 7.19, PPTXRGBColor(255, 248, 240))
+    add_textbox(slide2, 16.82, 5.97, 3.0, 0.91, "Gemini", FONT_R, 18, True, BRAND_RGB)
+    add_textbox(slide2, 16.82, 6.88, 12.5, 1.78,
+                "① 시크릿 모드 → gemini.google.com 접속\n     로그아웃 상태에서 질문",
+                FONT_L, 14, False, DARK)
+
+    # 주의사항
+    add_textbox(slide2, 1.98, 13.72, 29.76, 1.91,
+                "📌  각 질문은 새 채팅에서 입력하지 않고, 동일한 채팅 내에서 Q1→Q7 순서대로 연속 입력합니다.\n"
+                "📌  답변은 복사해서 별도 파일에 Q번호와 함께 저장해주세요. (예: Q1_GPT검색OFF.txt)",
+                FONT_L, 14, False, DARK)
+
+    # ── 슬라이드 3: 질문 타이틀 ──
+    slide3 = prs.slides.add_slide(blank_layout)
+    add_textbox(slide3, 1.25, 2.24, 10.0, 1.45,
+                "진단 질문 7개", FONT_R, 28, False, DARK)
+    add_textbox(slide3, 1.25, 3.89, 15.0, 0.94,
+                f"{st.session_state.brand_name} AI 브랜드 진단을 위한 핵심 질문",
+                FONT_L, 18, False, GRAY)
+
+    # ── Q 슬라이드 Q1~Q7 ──
+    for i, q_data in enumerate(st.session_state.questions):
+        n     = i + 1
+        q_txt = q_data.get('question','')
+        qtype = q_data.get('type','')
+        check = q_data.get('check_point','')
+        dlist = q_data.get('data',[])
+        insight = st.session_state.cw_insights[i] if i < len(st.session_state.cw_insights) else ''
+
+        slide = prs.slides.add_slide(blank_layout)
+
+        # Q번호 뱃지
+        qbadge = add_rect(slide, 2.11, 2.90, 1.93, 1.27, BRAND_RGB)
+        add_textbox(slide, 2.11, 2.90, 1.93, 1.27,
+                    f"Q{n}", FONT_R, 24, False, WHITE, PP_ALIGN.CENTER)
+
+        # 질문 텍스트
+        add_textbox(slide, 4.42, 2.90, 11.59, 1.27,
+                    q_txt, FONT_R, 24, False, DARK)
+
+        # 유형 뱃지
+        type_badge = add_rect(slide, 2.11, 4.60, 5.82, 1.52, BRAND_RGB)
+        add_textbox(slide, 2.11, 4.60, 5.82, 1.52,
+                    qtype, FONT_L, 16, False, WHITE)
+
+        # 확인 포인트
+        add_textbox(slide, 8.28, 4.88, 19.94, 0.94,
+                    f"확인 포인트 :  {check}", FONT_L, 16, False, GRAY)
+
+        # 📊 라벨
+        add_textbox(slide, 2.11, 7.70, 5.31, 0.94,
+                    "📊  선정 근거 데이터", FONT_L, 16, False, GRAY)
+
+        # 데이터 표
+        table_data = [["출처","데이터","연도"]]
+        for d in dlist:
+            table_data.append([d.get('source',''), d.get('content',''), d.get('year','')])
+        while len(table_data) < 4:
+            table_data.append(["","",""])
+
+        add_table_ppt(slide, 2.11, 8.82, 29.65,
+                      len(table_data), 3, table_data,
+                      CW_LIGHT,
+                      [PPTXRGBColor(255,255,255), PPTXRGBColor(245,242,237)])
+
+        # 인사이트 박스
+        ins_text = insight if insight.strip() else f"→  이 질문에서 {st.session_state.brand_name}의 포지셔닝을 확인하세요."
+        add_rect(slide, 2.11, 15.09, 29.65, 2.11, PPTXRGBColor(237,220,244))
+        add_textbox(slide, 2.64, 15.72, 0.89, 0.94, "→", FONT_L, 16, False, CW_LIGHT)
+        add_textbox(slide, 3.53, 15.72, 27.51, 0.94, ins_text, FONT_L, 16, False, DARK)
+
+    buf = io.BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────
+# [3] 전략제안서 Word 생성
+# ─────────────────────────────────────────────
+def create_proposal_word():
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+
+    FONT    = "페이퍼로지 3 Light"
+    br, bg, bb = brand_rgb()
+    cr, cg, cb = (112, 48, 160)
+    BRAND_HEX  = st.session_state.brand_color.replace('#','')
+    CW_HEX     = 'EADCF4'
+    GRAY_HEX   = 'F7F7F7'
+    WHITE_HEX  = 'FFFFFF'
+    GREEN_HEX  = 'D9F2D0'
+    ORANGE_HEX = 'FAE2D5'
+    DARK_HEX   = '1A1A1A'
+
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin    = Cm(1.8)
+        section.bottom_margin = Cm(1.8)
+        section.left_margin   = Cm(2.2)
+        section.right_margin  = Cm(2.2)
+
+    def set_bg(cell, hex_color):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'), 'clear')
+        shd.set(qn('w:color'), 'auto')
+        shd.set(qn('w:fill'), hex_color)
+        tcPr.append(shd)
+
+    def r(para, text, size=10, bold=False, color=None, font=FONT):
+        run = para.add_run(text)
+        run.font.name = font
+        run.font.size = Pt(size)
+        run.bold = bold
+        if color:
+            try:
+                run.font.color.rgb = RGBColor(
+                    int(color[0]), int(color[1]), int(color[2]))
+            except Exception:
+                pass
+        return run
+
+    def add_border_para(doc, color_hex, thickness=4):
+        p = doc.add_paragraph()
+        pPr = p._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bot = OxmlElement('w:bottom')
+        bot.set(qn('w:val'), 'single')
+        bot.set(qn('w:sz'), str(thickness))
+        bot.set(qn('w:space'), '1')
+        bot.set(qn('w:color'), color_hex)
+        pBdr.append(bot)
+        pPr.append(pBdr)
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after  = Pt(4)
+        return p
+
+    def part_header(doc, part_num, title):
+        p = doc.add_paragraph()
+        r(p, f"PART {part_num}  ", size=16, bold=True, color=(br,bg,bb))
+        r(p, title, size=14, bold=True, color=(26,23,20))
+        p.paragraph_format.space_before = Pt(12)
+        p.paragraph_format.space_after  = Pt(8)
+        return p
+
+    ai_keys     = ['off','on','gem']
+    ai_labels   = ['GPT 검색OFF','GPT 검색ON','Gemini']
+
+    # ── 표지 ──
+    p_logo = doc.add_paragraph()
+    r(p_logo, "CREAMWORKS  |  GEO 컨설팅 제안서  |  Confidential", size=9, color=(85,85,85))
+    p_logo.paragraph_format.space_after = Pt(2)
+
+    add_border_para(doc, BRAND_HEX, 6)
+
+    p_brand = doc.add_paragraph()
+    p_brand.paragraph_format.space_before = Pt(40)
+    p_brand.paragraph_format.space_after  = Pt(6)
+    r(p_brand, st.session_state.brand_name, size=36, color=(26,23,20))
+
+    p_sub = doc.add_paragraph()
+    r(p_sub, "AI 검색 최적화 (GEO) 전략 제안서", size=18, color=(cr,cg,cb))
+    p_sub.paragraph_format.space_after = Pt(6)
+
+    p_desc = doc.add_paragraph()
+    r(p_desc, "실제 AI 답변 기반 현황 진단 + GEO 개선 전략", size=11, color=(85,85,85))
+    p_desc.paragraph_format.space_after = Pt(40)
+
+    doc.add_page_break()
+
+    # ── 목적 박스 ──
+    obj_t = doc.add_table(rows=1, cols=1)
+    obj_t.style = 'Table Grid'
+    set_bg(obj_t.rows[0].cells[0], CW_HEX)
+    op = obj_t.rows[0].cells[0].paragraphs[0]
+    r(op, "📋  이 문서의 목적  \n", size=10, bold=True, color=(cr,cg,cb))
+    r(op, f"ChatGPT와 Gemini에 실제 소비자 질문 7개를 입력해 얻은 답변을 분석한 결과를 바탕으로, "
+          f"{st.session_state.brand_name}의 현재 AI 검색 노출 현황을 진단하고 구체적인 GEO 개선 전략을 제시합니다.",
+          size=10, color=(26,23,20))
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # ── PART 0: 질문 설계 ──
+    doc.add_page_break()
+    part_header(doc, 0, "진단 질문 설계 — 근거와 방법론")
+
+    q_table = doc.add_table(rows=len(st.session_state.questions)+1, cols=3)
+    q_table.style = 'Table Grid'
+    for ci, h in enumerate(["번호","단계","질문"]):
+        set_bg(q_table.rows[0].cells[ci], CW_HEX)
+        r(q_table.rows[0].cells[ci].paragraphs[0], h, size=9, bold=True, color=(85,85,85))
+    for i, q_data in enumerate(st.session_state.questions):
+        n   = i + 1
+        row = q_table.rows[n]
+        bg  = WHITE_HEX if i%2==0 else 'FAFAFA'
+        for ci in range(3):
+            set_bg(row.cells[ci], bg)
+        r(row.cells[0].paragraphs[0], f"Q{n}", size=9)
+        r(row.cells[1].paragraphs[0], q_data.get('stage',''), size=9)
+        r(row.cells[2].paragraphs[0], q_data.get('question',''), size=9)
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(6)
+
+    # ── PART 1: AI 진단 결과 ──
+    doc.add_page_break()
+    part_header(doc, 1, "AI 진단 결과 — 현황 분석")
+
+    # 핵심 결론
+    conc_t = doc.add_table(rows=1, cols=1)
+    conc_t.style = 'Table Grid'
+    set_bg(conc_t.rows[0].cells[0], CW_HEX)
+    cp = conc_t.rows[0].cells[0].paragraphs[0]
+    r(cp, "🔑  핵심 결론  \n", size=10, bold=True, color=(cr,cg,cb))
+    r(cp, st.session_state.analysis_result[:400] + "...", size=10, color=(26,23,20))
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # B2A 매트릭스
+    mt = doc.add_table(rows=len(st.session_state.questions)+1, cols=5)
+    mt.style = 'Table Grid'
+    for ci, h in enumerate(["질문","내용","GPT 검색OFF","GPT 검색ON","Gemini"]):
+        set_bg(mt.rows[0].cells[ci], CW_HEX)
+        r(mt.rows[0].cells[ci].paragraphs[0], h, size=9, bold=True, color=(85,85,85))
+    for i, q_data in enumerate(st.session_state.questions):
+        n   = i + 1
+        row = mt.rows[n]
+        bg  = WHITE_HEX if i%2==0 else 'FEFFF0'
+        for ci in range(5):
+            set_bg(row.cells[ci], bg)
+        r(row.cells[0].paragraphs[0], f"Q{n}", size=9)
+        r(row.cells[1].paragraphs[0], q_data.get('question','')[:30], size=9)
+        for j, key in enumerate(ai_keys):
+            ans     = st.session_state.answers[key][n]
+            mention = check_mention(ans, st.session_state.brand_name)
+            cell    = row.cells[j+2]
+            if ans.strip():
+                if mention:
+                    set_bg(cell, 'D9F2D0')
+                    r(cell.paragraphs[0], "✅ 언급됨", size=9, color=(21,87,36))
+                else:
+                    set_bg(cell, 'FAE2D5')
+                    r(cell.paragraphs[0], "❌ 미언급", size=9, color=(180,50,30))
+            else:
+                r(cell.paragraphs[0], "—", size=9, color=(150,150,150))
+
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # ── PART 2: GEO 기초 진단 ──
+    doc.add_page_break()
+    part_header(doc, 2, "브랜드 GEO 기초 진단")
+
+    gd_t = doc.add_table(rows=1, cols=2)
+    gd_t.style = 'Table Grid'
+    set_bg(gd_t.rows[0].cells[0], GREEN_HEX)
+    set_bg(gd_t.rows[0].cells[1], ORANGE_HEX)
+    r(gd_t.rows[0].cells[0].paragraphs[0],
+      f"✅ GEO 강점 (AI에게 유리한 자산)\n{st.session_state.brand_usp}", size=9, color=(26,23,20))
+    r(gd_t.rows[0].cells[1].paragraphs[0],
+      f"❌ GEO 약점 (AI가 모르거나 약한 것)\n{st.session_state.brand_negative}", size=9, color=(26,23,20))
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # 경쟁사
+    competitors = [c.strip() for c in st.session_state.brand_competitors.split(',')]
+    comp_t = doc.add_table(rows=len(competitors)+1, cols=3)
+    comp_t.style = 'Table Grid'
+    for ci, h in enumerate(["경쟁사","AI 내 현재 포지션","교촌과의 격차"]):
+        set_bg(comp_t.rows[0].cells[ci], CW_HEX)
+        r(comp_t.rows[0].cells[ci].paragraphs[0], h, size=9, bold=True, color=(85,85,85))
+    for i, comp in enumerate(competitors):
+        row = comp_t.rows[i+1]
+        bg  = WHITE_HEX if i%2==0 else 'FAFAFA'
+        for ci in range(3):
+            set_bg(row.cells[ci], bg)
+        r(row.cells[0].paragraphs[0], comp, size=9)
+        r(row.cells[1].paragraphs[0], "AI 내 포지션 분석 필요", size=9, color=(150,150,150))
+        r(row.cells[2].paragraphs[0], "분석 결과 참조", size=9, color=(150,150,150))
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # ── PART 3~4: 전략 인사이트 ──
+    doc.add_page_break()
+    part_header(doc, 3, "크림웍스 GEO 전략 인사이트")
+
+    diag_t = doc.add_table(rows=1, cols=1)
+    diag_t.style = 'Table Grid'
+    set_bg(diag_t.rows[0].cells[0], CW_HEX)
+    dp = diag_t.rows[0].cells[0].paragraphs[0]
+    r(dp, "전체 현황 진단  \n", size=10, bold=True, color=(cr,cg,cb))
+    r(dp, st.session_state.overall_diagnosis or st.session_state.analysis_result[:300], size=10, color=(26,23,20))
+    doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    for i, q_data in enumerate(st.session_state.questions):
+        n       = i + 1
+        insight = st.session_state.cw_insights[i]
+        if insight.strip():
+            ins_t = doc.add_table(rows=2, cols=1)
+            ins_t.style = 'Table Grid'
+            set_bg(ins_t.rows[0].cells[0], DARK_HEX)
+            r(ins_t.rows[0].cells[0].paragraphs[0],
+              f"Q{n}. {q_data.get('question','')}", size=10, bold=True, color=(br,bg,bb))
+            set_bg(ins_t.rows[1].cells[0], CW_HEX)
+            r(ins_t.rows[1].cells[0].paragraphs[0],
+              f"💜 크림웍스 전략: {insight}", size=10, color=(cr,cg,cb))
+            doc.add_paragraph().paragraph_format.space_after = Pt(4)
+
+    # ── PART 4: 액션 플랜 ──
+    doc.add_page_break()
+    part_header(doc, 4, "우선 실행 액션 플랜")
+
+    action_t = doc.add_table(rows=3, cols=2)
+    action_t.style = 'Table Grid'
+    for ri, (label, content) in enumerate([
+        ("🚨 즉시 실행", ""),
+        ("⭐ 1개월 내", ""),
+        ("3개월 내", ""),
+    ]):
+        set_bg(action_t.rows[ri].cells[0], CW_HEX if ri>0 else DARK_HEX)
+        color = (br,bg,bb) if ri==0 else (cr,cg,cb)
+        r(action_t.rows[ri].cells[0].paragraphs[0], label, size=10, bold=True, color=color)
+        r(action_t.rows[ri].cells[1].paragraphs[0], content or "—", size=10)
+
+    lines = st.session_state.priority_actions.split('\n')
+    for line in lines:
+        if line.strip():
+            p = doc.add_paragraph()
+            r(p, line.strip(), size=10, color=(26,23,20))
+
+    # 푸터
+    fp = doc.add_paragraph()
+    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r(fp, "CREAMWORKS  —  AI가 좋아하는 브랜드를 만듭니다", size=9, color=(150,150,150))
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
+
+
+# ─────────────────────────────────────────────
+# [4] 전략제안서 PPT 생성
+# ─────────────────────────────────────────────
+def create_proposal_ppt():
+    FONT_M  = "페이퍼로지 5 Medium"
+    FONT_R  = "페이퍼로지 4 Regular"
+    FONT_L  = "페이퍼로지 3 Light"
+    br, bg, bb = brand_rgb()
+    BRAND_RGB = PPTXRGBColor(br, bg, bb)
+    CW_PURPLE = PPTXRGBColor(83, 39, 168)
+    CW_LIGHT  = PPTXRGBColor(124, 92, 191)
+    DARK      = PPTXRGBColor(26, 23, 20)
+    GRAY      = PPTXRGBColor(85, 85, 85)
+    WHITE     = PPTXRGBColor(255, 255, 255)
+    GOLD      = BRAND_RGB   # PART 번호에 브랜드 컬러 적용
+    GREEN     = PPTXRGBColor(217, 242, 208)
+    ORANGE_C  = PPTXRGBColor(250, 226, 213)
+    CW_LAVENDER = PPTXRGBColor(234, 220, 244)
+
+    W = Inches(13.33)
+    H = Inches(7.50)
+    prs = Presentation()
+    prs.slide_width  = W
+    prs.slide_height = H
+    blank = prs.slide_layouts[6]
+
+    ai_keys   = ['off','on','gem']
+    ai_labels = ['GPT 검색OFF','GPT 검색ON','Gemini']
+
+    def add_textbox(slide, left, top, width, height, text, font_name=FONT_L,
+                    font_size=16, bold=False, color=None, align=PP_ALIGN.LEFT):
+        tb = slide.shapes.add_textbox(
+            PPTXCm(left), PPTXCm(top), PPTXCm(width), PPTXCm(height))
+        tf = tb.text_frame
+        tf.word_wrap = True
+        p = tf.paragraphs[0]
+        p.alignment = align
+        run = p.add_run()
+        run.text = text
+        run.font.name = font_name
+        run.font.size = PPTXPt(font_size)
+        run.font.bold = bold
+        if color:
+            run.font.color.rgb = color
+        return tb
+
+    def add_rect(slide, left, top, width, height, fill_color):
+        shape = slide.shapes.add_shape(
+            1, PPTXCm(left), PPTXCm(top), PPTXCm(width), PPTXCm(height))
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = fill_color
+        shape.line.fill.background()
+        return shape
+
+    def part_slide(title_num, title_text):
+        slide = prs.slides.add_slide(blank)
+        add_textbox(slide, 2.82, 6.68, 6.05, 2.13,
+                    f"PART {title_num}", FONT_R, 44, False, GOLD)
+        add_rect(slide, 2.82, 8.81, 4.24, 0.15, GOLD)
+        add_textbox(slide, 2.82, 9.22, 12.0, 1.27,
+                    title_text, FONT_R, 24, False, DARK)
+        return slide
+
+    # ── 슬라이드 1: 표지 ──
+    slide1 = prs.slides.add_slide(blank)
+    add_rect(slide1, 0, 0, 33.87, 19.05, PPTXRGBColor(245,245,245))
+    add_rect(slide1, 8.56, 4.55, 0.46, 5.39, CW_PURPLE)
+    add_textbox(slide1, 9.38, 4.73, 12.0, 1.81,
+                "크림웍스\nGEO 컨설팅", FONT_M, 36, False, DARK)
+    add_textbox(slide1, 9.38, 6.55, 7.0, 1.27,
+                "[3. 전략 제안서]", FONT_R, 24, False, DARK)
+    add_textbox(slide1, 9.38, 7.73, 14.1, 1.63,
+                "AI 검색시대, 브랜드가 ChatGPT·Gemini 대답에서\n발견된 브랜드의 현재 상태에 대한 보고서입니다.",
+                FONT_R, 16, False, DARK)
+    add_textbox(slide1, 11.20, 17.69, 11.47, 0.86,
+                "CREAMWORKS  - AI가 좋아하는 브랜드를 만듭니다",
+                FONT_M, 14, False, CW_PURPLE)
+
+    # ── PART 0 섹션 ──
+    part_slide(0, "진단 질문 설계 - 근거와 방법론")
+
+    # ── PART 0 내용 슬라이드 ──
+    s0 = prs.slides.add_slide(blank)
+    add_textbox(s0, 2.11, 1.98, 11.51, 1.45,
+                "0. 설계 철학 및 질문별 개요", FONT_R, 28, False, DARK)
+    add_textbox(s0, 2.13, 3.89, 29.65, 1.80,
+                f"브랜드를 알던 모르던 일반적 소비자가 AI에게 정보를 요청하는 순간을 포착하는 것이 GEO의 출발점입니다.\n"
+                f"이 철학을 기반으로 DISCOVER → CONSIDER → DECIDE 여정 순서로 질문 7개가 설계되었습니다.",
+                FONT_L, 14, False, DARK)
+
+    # 질문 목록 표
+    q_rows = [["번호","단계","질문 내용"]]
+    for i, q_data in enumerate(st.session_state.questions):
+        q_rows.append([f"Q{i+1}", q_data.get('stage',''), q_data.get('question','')])
+    tbl = s0.shapes.add_table(len(q_rows), 3,
+        PPTXCm(2.11), PPTXCm(6.12), PPTXCm(29.65), PPTXCm(11.10)).table
+    tbl.columns[0].width = PPTXCm(2.5)
+    tbl.columns[1].width = PPTXCm(5.0)
+    tbl.columns[2].width = PPTXCm(22.15)
+    for ri, row_data in enumerate(q_rows):
+        for ci, val in enumerate(row_data):
+            cell = tbl.cell(ri, ci)
+            cell.fill.solid()
+            if ri == 0:
+                cell.fill.fore_color.rgb = CW_LIGHT
+                clr = WHITE
+                bold = True
+            else:
+                cell.fill.fore_color.rgb = PPTXRGBColor(255,255,255) if ri%2==1 else PPTXRGBColor(245,242,237)
+                clr = DARK
+                bold = False
+            tf = cell.text_frame
+            p  = tf.paragraphs[0]
+            run = p.add_run()
+            run.text = val
+            run.font.name  = FONT_L
+            run.font.size  = PPTXPt(13)
+            run.font.bold  = bold
+            run.font.color.rgb = clr
+
+    # ── PART 1 섹션 ──
+    part_slide(1, "AI 진단결과 - 현황분석")
+
+    # PART 1 내용: B2A 매트릭스
+    s1 = prs.slides.add_slide(blank)
+    add_textbox(s1, 2.11, 0.56, 15.0, 1.12,
+                "1. B2A 매트릭스 — AI 답변 기반 언급 현황", FONT_R, 22, False, DARK)
+
+    b2a_rows = [["질문","GPT 검색OFF","GPT 검색ON","Gemini"]]
+    for i, q_data in enumerate(st.session_state.questions):
+        n = i + 1
+        row_data = [f"Q{n}. {q_data.get('question','')[:25]}"]
+        for key in ai_keys:
+            ans     = st.session_state.answers[key][n]
+            mention = check_mention(ans, st.session_state.brand_name)
+            if ans.strip():
+                row_data.append("✅ 언급됨" if mention else "❌ 미언급")
+            else:
+                row_data.append("—")
+        b2a_rows.append(row_data)
+
+    tbl2 = s1.shapes.add_table(len(b2a_rows), 4,
+        PPTXCm(2.11), PPTXCm(2.0), PPTXCm(29.65), PPTXCm(16.0)).table
+    tbl2.columns[0].width = PPTXCm(12.0)
+    for ci in range(1, 4):
+        tbl2.columns[ci].width = PPTXCm(5.88)
+    for ri, row_data in enumerate(b2a_rows):
+        for ci, val in enumerate(row_data):
+            cell = tbl2.cell(ri, ci)
+            cell.fill.solid()
+            if ri == 0:
+                cell.fill.fore_color.rgb = CW_LIGHT
+                clr = WHITE
+                bold = True
+            else:
+                if "✅" in val:
+                    cell.fill.fore_color.rgb = PPTXRGBColor(217,242,208)
+                    clr = PPTXRGBColor(21,87,36)
+                elif "❌" in val:
+                    cell.fill.fore_color.rgb = PPTXRGBColor(250,226,213)
+                    clr = PPTXRGBColor(180,50,30)
+                else:
+                    cell.fill.fore_color.rgb = PPTXRGBColor(255,255,255) if ri%2==1 else PPTXRGBColor(245,242,237)
+                    clr = GRAY
+                bold = False
+            tf = cell.text_frame
+            p  = tf.paragraphs[0]
+            run = p.add_run()
+            run.text = val
+            run.font.name  = FONT_L
+            run.font.size  = PPTXPt(13)
+            run.font.bold  = bold
+            run.font.color.rgb = clr
+
+    # ── PART 2 섹션 ──
+    part_slide(2, "브랜드 GEO 기초 진단")
+
+    # ── PART 3 섹션 ──
+    part_slide(3, "크림웍스 GEO 전략 인사이트")
+
+    # PART 3 내용: 인사이트 슬라이드들
+    for i, q_data in enumerate(st.session_state.questions):
+        n       = i + 1
+        insight = st.session_state.cw_insights[i]
+        if not insight.strip():
+            continue
+        si = prs.slides.add_slide(blank)
+        add_rect(si, 2.11, 0.56, 29.65, 1.52, CW_LIGHT)
+        add_textbox(si, 2.64, 0.79, 28.0, 1.02,
+                    f"Q{n}. {q_data.get('question','')}", FONT_R, 20, True, WHITE)
+        add_rect(si, 2.11, 2.41, 29.65, 5.46, CW_LAVENDER)
+        add_textbox(si, 2.64, 2.79, 0.89, 0.94, "→", FONT_L, 20, False, CW_LIGHT)
+        add_textbox(si, 3.81, 2.79, 27.51, 4.37, insight, FONT_L, 16, False, DARK)
+
+    # ── PART 4 섹션 ──
+    part_slide(4, "우선 실행 액션 플랜")
+
+    # 액션 슬라이드
+    sa = prs.slides.add_slide(blank)
+    add_textbox(sa, 2.11, 0.56, 15.0, 1.12,
+                "4. GEO 실행 액션 플랜", FONT_R, 22, False, DARK)
+
+    actions = [
+        ("🚨 즉시", "robots.txt, Schema Markup, 브랜드명 통일 표기"),
+        ("⭐ 1개월", "FAQ 콘텐츠 7개, llms.txt, 나무위키 보강"),
+        ("3개월", "언론 PR, 채널별 콘텐츠 배포, B2A 월간 측정 시작"),
+    ]
+    for ai, (label, content) in enumerate(actions):
+        top = 2.2 + ai * 4.5
+        add_rect(sa, 2.11, top, 29.65, 3.81, CW_LAVENDER if ai>0 else PPTXRGBColor(26,23,20))
+        clr = BRAND_RGB if ai==0 else CW_PURPLE
+        add_textbox(sa, 2.64, top+0.51, 5.0, 0.94, label, FONT_R, 20, True, clr)
+        add_textbox(sa, 8.0, top+0.51, 23.0, 2.54, content, FONT_L, 16, False, DARK)
+
+    # 마지막: 푸터 슬라이드
+    sf = prs.slides.add_slide(blank)
+    add_rect(sf, 0, 0, 33.87, 19.05, PPTXRGBColor(26,23,20))
+    add_textbox(sf, 9.38, 8.38, 15.0, 1.45,
+                "CREAMWORKS  —  AI가 좋아하는 브랜드를 만듭니다",
+                FONT_M, 20, False, CW_PURPLE, PP_ALIGN.CENTER)
+
+    buf = io.BytesIO()
+    prs.save(buf)
+    buf.seek(0)
+    return buf
 
 
 
@@ -303,7 +1286,7 @@ from datetime import datetime
 # 페이지 설정
 # ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="GEO-Scan v2 | 크림웍스",
+    page_title="GEO-Scan | 크림웍스",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
@@ -473,15 +1456,15 @@ bc = st.session_state.brand_color
 bn = st.session_state.brand_name or 'GEO-Scan'
 st.markdown(f"""
 <div class="brand-header" style="background: linear-gradient(135deg, #0f0f0f 60%, {bc}99);">
-  <div style="font-size:0.78rem;color:#888;letter-spacing:2px;font-weight:600;">CREAMWORKS  ·  GEO-Scan  |  앱 1</div>
+  <div style="font-size:0.78rem;color:#888;letter-spacing:2px;font-weight:600;">CREAMWORKS  ·  GEO-Scan v2.0</div>
   <div style="font-size:1.7rem;font-weight:800;margin:6px 0 4px;">{bn} AI 진단 시스템</div>
-  <div style="font-size:0.85rem;color:#bbb;">브랜드 AI 검색 노출 현황 진단 · 분석 결과 Excel 저장</div>
+  <div style="font-size:0.85rem;color:#bbb;">브랜드 AI 검색 노출 현황 진단 · GEO 전략 제안서 자동 생성</div>
 </div>
 """, unsafe_allow_html=True)
 
 # 스텝 인디케이터
-step_names = ["브랜드 입력", "질문 확인", "답변 수집", "분석·Excel 저장"]
-cols = st.columns(4)
+step_names = ["브랜드 입력", "질문 확인", "답변 수집", "분석·인사이트", "보고서"]
+cols = st.columns(5)
 for i, (col, name) in enumerate(zip(cols, step_names)):
     n = i + 1
     active = st.session_state.step == n
@@ -514,7 +1497,7 @@ if st.session_state.step == 1:
             st.caption("브랜드 정보 + 질문 + 답변 복원 → STEP 4 (분석) 부터 시작")
         with col_b:
             st.markdown("**케이스 B — 전체데이터 Excel**")
-            st.caption("브랜드 정보 + 질문 + 답변 + 분석 복원 → STEP 4 (분석·Excel 저장) 부터 시작")
+            st.caption("브랜드 정보 + 질문 + 답변 + 분석 복원 → STEP 5 (보고서) 부터 시작")
 
         uploaded_xl = st.file_uploader(
             "Excel 파일 업로드 (답변수집 또는 전체데이터)",
@@ -530,7 +1513,7 @@ if st.session_state.step == 1:
                     brand = st.session_state.get('brand_name','')
                     st.info(f"브랜드: **{brand}** | 질문 **{len(st.session_state.questions)}개** | 답변 복원 완료")
                 else:
-                    st.success(f"✅ **전체데이터 파일** 복원 완료! → STEP 4 (분석·Excel 저장) 로 이동합니다.")
+                    st.success(f"✅ **전체데이터 파일** 복원 완료! → STEP 5 (보고서 생성) 로 이동합니다.")
                     brand = st.session_state.get('brand_name','')
                     st.info(f"브랜드: **{brand}** | Claude 분석 결과 포함")
 
@@ -642,56 +1625,45 @@ if st.session_state.step == 1:
                 try:
                     client = get_client()
 
-                    brand_nm    = st.session_state.brand_name
-                    brand_comp  = st.session_state.brand_competitors
-                    brand_cat   = st.session_state.brand_category
-
                     prompt = f"""당신은 GEO(Generative Engine Optimization) 전문가입니다.
 아래 브랜드 정보를 바탕으로, 소비자가 ChatGPT·Gemini에 실제로 물어볼 법한 GEO 진단 질문 7개를 설계해주세요.
 
-⚠️ 핵심 주의: 각 필드에는 질문 설계 메타데이터만 작성합니다. 절대로 AI 답변 내용, 추천 목록, 제품 설명을 작성하지 마세요.
-
 브랜드 정보:
-- 브랜드명: {brand_nm}
+- 브랜드명: {st.session_state.brand_name}
 - 카테고리: {st.session_state.brand_category}
 - 핵심 USP: {st.session_state.brand_usp}
 - 주요 타겟: {st.session_state.brand_target}
-- 경쟁 브랜드: {brand_comp}
+- 경쟁 브랜드: {st.session_state.brand_competitors}
 - 부정 이미지/약점: {st.session_state.brand_negative}
 - 강조 포인트: {st.session_state.brand_focus}
 
 질문 설계 원칙:
 1. 브랜드명이 절대 들어가면 안 됨 (브랜드를 모르는 소비자가 AI에게 묻는 질문)
 2. 실제 소비자가 쓰는 구어체
-3. 단계: DISCOVER(2개) / CONSIDER(3개) / DECIDE(2개)
+3. AIJ 단계: DISCOVER(2개) / CONSIDER(3개) / DECIDE(2개)
 4. 브랜드 USP와 직접 연결되는 질문 우선
 5. 부정 이미지 방어 질문 1개 이상 포함
 
-[check_point 필드 작성 규칙 — 반드시 준수]
-- 반드시 1~2문장의 짧은 진단 기준만 작성
-- 형식 예시: "{brand_nm}이(가) [구체적 맥락]으로 언급되는지 + {brand_comp} 대비 포지션 언급 여부"
-- 절대 금지: AI 답변 내용, 제품 설명, 마크다운(#, *, -), URL, 추천 목록 등 일절 포함 금지
-- 최대 길이: 100자 이내
-
-[data 필드 작성 규칙]
-- 각 질문마다 실제 기관/매체 데이터 3개
+⚠️ data 필드 작성 필수 규칙:
+- 각 질문마다 반드시 실제 존재하는 기관/매체의 데이터 3개를 넣어야 함
 - "출처기관" 같은 템플릿 문자열 절대 금지. 반드시 실제 기관명 사용
-- 실제 기관 예시: 한국소비자원, 식품의약품안전처, 오픈서베이, 네이버 데이터랩, 닐슨코리아, 통계청, aT한국농수산식품유통공사, 와이즈앱 등
-- content는 구체적 수치/통계 포함, 1~2문장 이내
+- 실제 기관 예시: 한국소비자원, 식품의약품안전처, 오픈서베이, 네이버 데이터랩, 닐슨코리아, 건강보험심사평가원, 통계청, aT한국농수산식품유통공사, 매일경제, 조선일보, 와이즈앱, 서울대병원, 대한의사협회 등 (카테고리에 맞는 기관 선택)
+- content는 해당 카테고리와 직접 관련된 구체적 수치/통계/트렌드 포함
 - year는 2023~2026 사이 실제 연도
+- check_point는 구체적으로: "{st.session_state.brand_name}이(가) [구체적 맥락]으로 등장하는지 + [{st.session_state.brand_competitors}] 대비 [포지션] 언급 여부" 형식
 
-반드시 아래 JSON 형식으로만 응답 (마크다운 코드블록 없이, JSON만):
+반드시 아래 JSON 형식으로만 응답 (다른 텍스트 없이):
 {{
   "questions": [
     {{
       "question": "질문 내용 (구어체, 브랜드명 없이)",
       "stage": "DISCOVER 또는 CONSIDER 또는 DECIDE",
-      "type": "유형명 10자 이내",
-      "check_point": "1~2문장 진단 기준만. 마크다운/답변내용/URL 절대 금지. 100자 이내.",
+      "type": "유형명 (예: 카테고리 진입 — 브랜드 선택 첫 질문)",
+      "check_point": "확인 포인트: {st.session_state.brand_name}이(가) [구체적 맥락]으로 등장하는지 + [{st.session_state.brand_competitors}] 대비 포지션 언급 여부",
       "data": [
-        {{"source": "실제기관명", "content": "구체적 수치 포함 1~2문장", "year": "2024"}},
-        {{"source": "실제기관명", "content": "구체적 수치 포함 1~2문장", "year": "2025"}},
-        {{"source": "실제기관명", "content": "구체적 수치 포함 1~2문장", "year": "2024"}}
+        {{"source": "실제기관명", "content": "구체적 수치 포함한 데이터 내용", "year": "2024"}},
+        {{"source": "실제기관명", "content": "구체적 수치 포함한 데이터 내용", "year": "2025"}},
+        {{"source": "실제기관명", "content": "구체적 수치 포함한 데이터 내용", "year": "2024"}}
       ]
     }}
   ]
@@ -704,35 +1676,20 @@ if st.session_state.step == 1:
                     )
 
                     raw = message.content[0].text.strip()
-
-                    # JSON 추출 - 코드블록 및 앞뒤 텍스트 제거
-                    import re as _re
-                    cb = _re.search(r'```(?:json)?\s*(\{.*?\})\s*```', raw, _re.DOTALL)
-                    if cb:
-                        raw = cb.group(1)
-                    else:
-                        m = _re.search(r'(\{.*\})', raw, _re.DOTALL)
-                        if m:
-                            raw = m.group(1)
+                    if "```" in raw:
+                        raw = raw.split("```")[1]
+                        if raw.startswith("json"):
+                            raw = raw[4:]
                     raw = raw.strip()
 
-                    parsed = json.loads(raw)
-                    questions = parsed['questions']
-
-                    # check_point 오염 방지: 200자 초과 or 마크다운 감지 시 자동 정제
-                    for q in questions:
-                        cp = q.get('check_point', '')
-                        if len(cp) > 200 or any(c in cp for c in ['#', '**', '[', 'http', '---', '\n\n']):
-                            first = cp.split('\n')[0][:150].strip()
-                            q['check_point'] = first if first else f"{st.session_state.brand_name}의 AI 노출 현황 확인"
-
-                    st.session_state.questions = questions
+                    data = json.loads(raw)
+                    st.session_state.questions = data['questions']
                     st.session_state.questions_confirmed = False
                     st.session_state.step = 2
                     st.rerun()
 
-                except json.JSONDecodeError as je:
-                    st.error(f"질문 생성 중 JSON 파싱 오류가 발생했습니다. 다시 시도해주세요.\n{str(je)}")
+                except json.JSONDecodeError:
+                    st.error("질문 생성 중 파싱 오류가 발생했습니다. 다시 시도해주세요.")
                 except Exception as e:
                     st.error(f"오류 발생: {str(e)}")
 
@@ -870,7 +1827,7 @@ elif st.session_state.step == 3:
 
     # Excel 저장 버튼
     st.markdown("#### 💾 답변 저장")
-    st.caption("수집한 답변을 중간 저장해두세요. 세션 종료 시 데이터가 사라집니다. 저장한 파일은 다시 업로드해서 이어서 진행할 수 있습니다.")
+    st.caption("수집한 답변을 Excel 파일로 저장해두세요. 세션이 종료되면 데이터가 사라집니다.")
 
     if st.button("📊 답변 Excel 저장", use_container_width=True):
         if total == 0:
@@ -1030,13 +1987,96 @@ elif st.session_state.step == 4:
         key="priority_act"
     )
 
+    col_back, col_next = st.columns([1, 3])
+    with col_back:
+        if st.button("← 답변 수정", use_container_width=True):
+            st.session_state.step = 3
+            st.rerun()
+    with col_next:
+        if st.button("📄 보고서 생성 →", type="primary", use_container_width=True):
+            st.session_state.step = 5
+            st.rerun()
+
+# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# STEP 5: Word 보고서 생성
+# ─────────────────────────────────────────────
+elif st.session_state.step == 5:
+    st.markdown('<div class="step-label">STEP 5</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-title">보고서 생성</div>', unsafe_allow_html=True)
+
+    st.markdown(f"""
+    <div class="cw-box">
+      💜 브랜드 컬러 <b>{st.session_state.brand_color}</b> 자동 적용 &nbsp;|&nbsp;
+      크림웍스 퍼플 <b>#7030A0</b> &nbsp;|&nbsp;
+      폰트 <b>페이퍼로지</b> 계열 적용
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("#### 📄 질문지")
+    col_qw, col_qp = st.columns(2)
+
+    with col_qw:
+        st.markdown("**질문지 Word** — 내부 검토용")
+        if st.button("📄 질문지 Word 생성", use_container_width=True):
+            with st.spinner("질문지 Word 생성 중..."):
+                buf = create_question_word()
+            fname = f"{st.session_state.brand_name}_GEO_AI진단질문지_{datetime.now().strftime('%Y%m%d')}.docx"
+            st.download_button(
+                label=f"⬇️ {fname}",
+                data=buf, file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_qw"
+            )
+
+    with col_qp:
+        st.markdown("**질문지 PPT** — 광고주 제안용")
+        if st.button("📊 질문지 PPT 생성", use_container_width=True):
+            with st.spinner("질문지 PPT 생성 중..."):
+                buf = create_question_ppt()
+            fname = f"{st.session_state.brand_name}_GEO_AI진단질문지_{datetime.now().strftime('%Y%m%d')}.pptx"
+            st.download_button(
+                label=f"⬇️ {fname}",
+                data=buf, file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True, key="dl_qp"
+            )
+
+    st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+    st.markdown("#### 📑 전략제안서")
+    col_pw, col_pp = st.columns(2)
+
+    with col_pw:
+        st.markdown("**전략제안서 Word** — 내부 검토용")
+        if st.button("📄 전략제안서 Word 생성", use_container_width=True):
+            with st.spinner("전략제안서 Word 생성 중..."):
+                buf = create_proposal_word()
+            fname = f"{st.session_state.brand_name}_GEO_전략제안서_{datetime.now().strftime('%Y%m%d')}.docx"
+            st.download_button(
+                label=f"⬇️ {fname}",
+                data=buf, file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True, key="dl_pw"
+            )
+
+    with col_pp:
+        st.markdown("**전략제안서 PPT** — 광고주 제안용")
+        if st.button("📊 전략제안서 PPT 생성", use_container_width=True):
+            with st.spinner("전략제안서 PPT 생성 중..."):
+                buf = create_proposal_ppt()
+            fname = f"{st.session_state.brand_name}_GEO_전략제안서_{datetime.now().strftime('%Y%m%d')}.pptx"
+            st.download_button(
+                label=f"⬇️ {fname}",
+                data=buf, file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                use_container_width=True, key="dl_pp"
+            )
+
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
-    # ── Excel 최종 저장 ──
-    st.markdown("#### 💾 GEO-Report 앱용 Excel 저장")
-    st.markdown('<div class="cw-box">💜 분석이 완료됐습니다. Excel을 저장한 뒤 <b>GEO-Report 앱</b>에 업로드하면 Word·PPT 보고서가 자동 생성됩니다.</div>', unsafe_allow_html=True)
-
-    if st.button("📊 전체 데이터 Excel 저장", type="primary", use_container_width=True):
+    # 전체 데이터 Excel 저장
+    st.markdown("#### 💾 전체 데이터 Excel 저장")
+    st.caption("브랜드 정보 + 질문 + 답변 + B2A 분석 + Claude 분석 결과를 한 파일로 저장합니다.")
+    if st.button("📊 전체 데이터 Excel 저장", use_container_width=True):
         with st.spinner("Excel 파일 생성 중..."):
             buf = create_answer_excel()
         fname = f"{st.session_state.brand_name}_GEO_전체데이터_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
@@ -1048,13 +2088,13 @@ elif st.session_state.step == 4:
             use_container_width=True,
             key="dl_excel_full"
         )
-        st.success("✅ Excel 저장 완료! GEO-Report 앱에서 열어주세요.")
+        st.success("전체 데이터가 저장되었습니다!")
 
     st.markdown("<hr class='divider'>", unsafe_allow_html=True)
     col_back, col_new = st.columns([1, 3])
     with col_back:
-        if st.button("← 답변 수정", use_container_width=True):
-            st.session_state.step = 3
+        if st.button("← 인사이트 수정", use_container_width=True):
+            st.session_state.step = 4
             st.rerun()
     with col_new:
         if st.button("🔄 새 브랜드 진단 시작", use_container_width=True):
