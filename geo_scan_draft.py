@@ -20,6 +20,92 @@ def brand_rgb():
 
 
 # ─────────────────────────────────────────────
+# Excel 불러오기 함수
+# ─────────────────────────────────────────────
+def load_from_excel(uploaded_file):
+    """
+    Excel 파일을 읽어 session_state에 복원.
+    반환값: 'answer' (답변수집) 또는 'full' (전체데이터)
+    """
+    wb = openpyxl.load_workbook(uploaded_file)
+    sheets = wb.sheetnames
+
+    # ── 브랜드 정보 복원 ──
+    if '브랜드 정보' in sheets:
+        ws = wb['브랜드 정보']
+        info_map = {
+            '브랜드명':   'brand_name',
+            '카테고리':   'brand_category',
+            '핵심 USP':  'brand_usp',
+            '주요 타겟':  'brand_target',
+            '경쟁 브랜드': 'brand_competitors',
+            '부정 이미지': 'brand_negative',
+            '강조 포인트': 'brand_focus',
+        }
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            label, value = row[0], row[1]
+            if label in info_map and value:
+                st.session_state[info_map[label]] = str(value)
+
+    # ── 질문 + 답변 복원 ──
+    if 'AI 답변 수집' in sheets:
+        ws2 = wb['AI 답변 수집']
+        questions = []
+        answers = {
+            'off': {i: '' for i in range(1, 8)},
+            'on':  {i: '' for i in range(1, 8)},
+            'gem': {i: '' for i in range(1, 8)},
+        }
+        for row in ws2.iter_rows(min_row=2, values_only=True):
+            if not row[0] or not str(row[0]).startswith('Q'):
+                continue
+            n = int(str(row[0]).replace('Q', ''))
+            q_dict = {
+                'question':    str(row[1]) if row[1] else '',
+                'type':        str(row[2]) if row[2] else '',
+                'stage':       str(row[3]) if row[3] else '',
+                'check_point': '',
+                'data':        [],
+            }
+            questions.append(q_dict)
+            answers['off'][n] = str(row[4]) if row[4] else ''
+            answers['on'][n]  = str(row[5]) if row[5] else ''
+            answers['gem'][n] = str(row[6]) if row[6] else ''
+
+        st.session_state.questions = questions
+        st.session_state.answers   = answers
+        st.session_state.questions_confirmed = True
+
+    # ── Claude 분석 결과 복원 ──
+    has_analysis = False
+    if 'Claude 분석' in sheets:
+        ws4 = wb['Claude 분석']
+        for row in ws4.iter_rows(min_row=2, values_only=True):
+            if row[0]:
+                st.session_state.analysis_result = str(row[0])
+                has_analysis = True
+                break
+
+    # ── 파일 타입 판별 ──
+    if has_analysis and st.session_state.get('analysis_result', '').strip():
+        # 전체데이터: STEP 5로
+        st.session_state.overall_diagnosis  = st.session_state.analysis_result[:300]
+        st.session_state.cw_insights        = [''] * 7
+        st.session_state.priority_actions   = ''
+        st.session_state.step = 5
+        return 'full'
+    else:
+        # 답변수집: STEP 4로
+        st.session_state.analysis_result    = ''
+        st.session_state.overall_diagnosis  = ''
+        st.session_state.cw_insights        = [''] * 7
+        st.session_state.priority_actions   = ''
+        st.session_state.step = 4
+        return 'answer'
+
+
+
+# ─────────────────────────────────────────────
 # Excel 답변 저장 함수
 # ─────────────────────────────────────────────
 def create_answer_excel():
@@ -1356,6 +1442,47 @@ for i, (col, name) in enumerate(zip(cols, step_names)):
     </div>""", unsafe_allow_html=True)
 
 st.markdown("<hr class='divider'>", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# 이전 작업 이어하기 (Excel 업로드)
+# ─────────────────────────────────────────────
+if st.session_state.step == 1:
+    with st.expander("📂 이전 작업 이어하기 (Excel 업로드)", expanded=False):
+        st.caption("이전에 저장한 Excel 파일을 업로드하면 중간부터 이어서 진행할 수 있습니다.")
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**케이스 A — 답변수집 Excel**")
+            st.caption("브랜드 정보 + 질문 + 답변 복원 → STEP 4 (분석) 부터 시작")
+        with col_b:
+            st.markdown("**케이스 B — 전체데이터 Excel**")
+            st.caption("브랜드 정보 + 질문 + 답변 + 분석 복원 → STEP 5 (보고서) 부터 시작")
+
+        uploaded_xl = st.file_uploader(
+            "Excel 파일 업로드 (답변수집 또는 전체데이터)",
+            type=["xlsx"],
+            key="resume_upload"
+        )
+
+        if uploaded_xl is not None:
+            try:
+                file_type = load_from_excel(uploaded_xl)
+                if file_type == 'answer':
+                    st.success(f"✅ **답변수집 파일** 복원 완료! → STEP 4 (분석 시작) 로 이동합니다.")
+                    brand = st.session_state.get('brand_name','')
+                    st.info(f"브랜드: **{brand}** | 질문 **{len(st.session_state.questions)}개** | 답변 복원 완료")
+                else:
+                    st.success(f"✅ **전체데이터 파일** 복원 완료! → STEP 5 (보고서 생성) 로 이동합니다.")
+                    brand = st.session_state.get('brand_name','')
+                    st.info(f"브랜드: **{brand}** | Claude 분석 결과 포함")
+
+                if st.button("▶ 이어서 진행하기", type="primary"):
+                    st.rerun()
+
+            except Exception as e:
+                st.error(f"파일 읽기 오류: {e}\n올바른 GEO-Scan Excel 파일을 업로드해주세요.")
+
+    st.markdown("<hr class='divider'>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # STEP 1: 브랜드 정보 입력
