@@ -481,7 +481,7 @@ def create_question_word():
         # 유형 + 확인포인트 행
         type_t = doc.add_table(rows=1, cols=2)
         type_t.style = 'Table Grid'
-        set_bg(type_t.rows[0].cells[0], YELLOW_HEX)
+        set_bg(type_t.rows[0].cells[0], BRAND_LIGHT_HEX)
         set_bg(type_t.rows[0].cells[1], GRAY_HEX)
         set_cell_margins(type_t.rows[0].cells[0])
         set_cell_margins(type_t.rows[0].cells[1])
@@ -785,7 +785,6 @@ def create_proposal_word():
     cr, cg, cb = (112, 48, 160)
     BRAND_HEX  = st.session_state.brand_color.replace('#','')
     CW_HEX     = 'EADCF4'
-    YELLOW_HEX = 'FFCC66'
     GRAY_HEX   = 'F7F7F7'
     WHITE_HEX  = 'FFFFFF'
     GREEN_HEX  = 'D9F2D0'
